@@ -1,0 +1,118 @@
+{
+    "Model":{
+        "device":"cuda",
+        "type":"full",
+        "path_model":"The dir to save ckpt",
+        "iterations": 3,
+        "path_predicted_images":"output",
+        "model_timm":"vit_base_patch16_384",
+        "emb_dim":768,
+        "hooks":[2, 5, 8, 11],
+        "read":"projection",
+        "resample_dim":256,
+        "pretrain":true,
+        "patch_size":16
+    },
+
+    "Trainer":{
+        "epochs":40,
+        "loss_depth":"mse+normal+grad",
+        "loss_segmentation":"ce",
+        "ckpt_path":"./ckpt/ISGNet_syntodd.p",
+        "gamma": 0.33,
+        "seg_multi":0.1,
+        "depth_multi":1.0,
+        "depth_scale_multi":1.0,
+        "depth_grad_multi":1.0,
+        "depth_normal_multi":1.0,
+        "depth_error_multi":1.0,
+        "optim":"adam",
+        "lr_backbone":1e-5,
+        "lr_scratch":3e-4,
+        "momentum":0.9,
+        "seed":0
+         
+    },
+
+    "Dataset":{
+        "dataset_name":"syntodd",
+        "syntodd":{
+            "batch_size":4,
+            "num_workers":2,
+            "in_chans":3,
+            "num_multiview":2,
+            "train_num_samples":56,
+            "val_num_samples":10,
+            "test_num_samples":43,
+            "train_shuffle":true,
+            "val_shuffle":false,
+            "test_shuffle":false,
+            "paths":{
+                "train_path":"/root/siton-data-hj/SYN_Data/synthetic_dataset_pkl",
+                "val_path":"/root/siton-data-hj/SYN_Data/synthetic_dataset_val_pkl",
+                "test_path":"/root/siton-data-hj/SYN_Data/blender_dataset_test_pkl_v2"
+            },
+            "train":{
+                "ext_images":".jpg",
+                "ext_segmentations":".png",
+                "ext_depths":".jpg"
+            },
+            "splits":{
+                "split_train":0.6,
+                "split_val":0.2,
+                "split_test":0.2
+            },
+            "transforms":{
+                "im_resize":384,
+                "p_flip":0.5,
+                "p_crop":0.3,
+                "p_rot":0.2
+            },
+            "classes":{
+                "0": {
+                    "name": "background"
+                },
+                "1": {
+                    "name": "desk",
+                    "color": [150,5,61]
+                }, 
+                "2": {
+                    "name": "transparent"
+                }
+            }
+        },
+        "clearpose":{
+            "batch_size":4,
+            "path":"The absolute path to Clearpose dataset/",
+            "num_workers":2,
+            "train_shuffle":true,
+            "val_shuffle":false,
+            "in_chans":3,
+            "depth_min":0.3,
+            "depth_max":3.0,
+            "transforms":{
+                "im_resize":384,
+                "p_flip":0.5,
+                "p_crop":0.3,
+                "p_rot":0.2
+            },
+            "classes":{
+                "0": {
+                    "name": "background"
+                },
+                "1": {
+                    "name": "object"
+                }
+            }
+        }
+    },
+
+    "wandb":{
+        "enable":true,
+        "username":"Modify here",
+        "images_to_show":3,
+        "im_h":480,
+        "im_w":640
+    }
+
+}

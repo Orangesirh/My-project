@@ -1,0 +1,5 @@
+# 排除不需要上传的文件/目录  
+wandb/  
+ckpt/  
+LICENSE  
+dataloaders.zip  
