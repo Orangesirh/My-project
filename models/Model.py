@@ -30,7 +30,8 @@ class ISGNet(nn.Module):
                  model_timm         = "vit_large_patch16_384",
                  pretrain           = True,
                  iterations         = 3,
-                 in_chans           = 3):
+                 in_chans           = 3,
+                 coord_reduction    = 32):  # ← 新增参数
         """
         type : {"full", "depth", "seg"}
         image_size : (c, h, w)
@@ -38,6 +39,7 @@ class ISGNet(nn.Module):
         emb_dim <=> D (in the paper)
         resample_dim <=> ^D (in the paper)
         read : {"ignore", "add", "projection"}
+        coord_reduction: CoordinateAttention的降维比例（新增）
         """
         super().__init__()
 
@@ -57,7 +59,8 @@ class ISGNet(nn.Module):
         self.fusions = []
         for s in reassemble_s:
             self.reassembles.append(Reassemble(image_size, read, patch_size, s, emb_dim, resample_dim))
-            self.fusions.append(Fusion(resample_dim, nclasses))
+            coord_reduction = 32  # 或从config中读取
+            self.fusions.append(Fusion(resample_dim, nclasses, coord_reduction=coord_reduction))
         self.reassembles = nn.ModuleList(self.reassembles)
         self.fusions = nn.ModuleList(self.fusions)
 

@@ -16,6 +16,7 @@ from utils.loss import get_surface_normal
 from utils.visualize import *
 from utils.evaluate import compute_depth_metrics, compute_seg_metrics
 
+from utils.progress import create_train_progress_bar, create_val_progress_bar, safe_write
 
 
 class Trainer(object):
@@ -62,7 +63,8 @@ class Trainer(object):
                     patch_size  =   config['Model']['patch_size'],
                     pretrain    =   config['Model']['pretrain'],
                     iterations  =   config['Model']['iterations'],
-                    in_chans    =   config['Dataset'][self.dataset_name]["in_chans"]
+                    in_chans    =   config['Dataset'][self.dataset_name]["in_chans"],
+                    coord_reduction = config['Model'].get('coord_reduction', 32)  # ← 新增，默认32
         )
 
         self.model.to(self.device)
@@ -175,8 +177,10 @@ class Trainer(object):
             train_grad_loss, train_normal_loss = 0.0, 0.0
             
             self.model.train()
-            pbar = tqdm(train_dataloader, desc="Training")
+            #pbar = tqdm(train_dataloader, desc="Training")
             
+            pbar = create_train_progress_bar(train_dataloader, epoch=epoch+1)
+
             for index, data in enumerate(pbar):
                 try:
                     self.optimizer_backbone.zero_grad()
@@ -346,19 +350,35 @@ class Trainer(object):
                     train_loss += loss_value
                     
                     # 更新进度条
-                    pbar.set_postfix({
-                        'total_loss': f'{train_loss/(index+1):.6f}',
-                        'depth_loss': f'{train_depth_all_loss/(index+1):.6f}',
-                        'seg_loss': f'{train_seg_all_loss/(index+1):.6f}'
-                    })
-                    
+                    # pbar.set_postfix({
+                    #     'total_loss': f'{train_loss/(index+1):.6f}',
+                    #     'depth_loss': f'{train_depth_all_loss/(index+1):.6f}',
+                    #     'seg_loss': f'{train_seg_all_loss/(index+1):.6f}'
+                    # })
+
+                    if index % 10 == 0:
+                        pbar.set_postfix({
+                            'loss': f'{train_loss/(index+1):.6f}',
+                            'depth': f'{train_depth_all_loss/(index+1):.6f}',
+                            'seg': f'{train_seg_all_loss/(index+1):.6f}'
+                        })
+
+                  
                     ## debug
+                    # if np.isnan(train_loss):
+                    #     print(f'\nNaN detected at batch {index}:')
+                    #     print(f'  RGB range: [{rgb.min().item():.3f}, {rgb.max().item():.3f}]')
+                    #     print(f'  Depth GT range: [{depth_gt.min().item():.3f}, {depth_gt.max().item():.3f}]')
+                    #     print(f'  Model output range: [{output_depths[-1][-1].min().item():.3f}, {output_depths[-1][-1].max().item():.3f}]')
+                    #     print(f'  Total loss: {loss_value}')
+                    #     raise ValueError("NaN loss detected")
+
                     if np.isnan(train_loss):
-                        print(f'\nNaN detected at batch {index}:')
-                        print(f'  RGB range: [{rgb.min().item():.3f}, {rgb.max().item():.3f}]')
-                        print(f'  Depth GT range: [{depth_gt.min().item():.3f}, {depth_gt.max().item():.3f}]')
-                        print(f'  Model output range: [{output_depths[-1][-1].min().item():.3f}, {output_depths[-1][-1].max().item():.3f}]')
-                        print(f'  Total loss: {loss_value}')
+                        safe_write(pbar, f'\n⚠️  NaN detected at batch {index}:')
+                        safe_write(pbar, f'  RGB range: [{rgb.min().item():.3f}, {rgb.max().item():.3f}]')
+                        safe_write(pbar, f'  Depth GT range: [{depth_gt.min().item():.3f}, {depth_gt.max().item():.3f}]')
+                        safe_write(pbar, f'  Model output range: [{output_depths[-1][-1].min().item():.3f}, {output_depths[-1][-1].max().item():.3f}]')
+                        safe_write(pbar, f'  Total loss: {loss_value}')
                         raise ValueError("NaN loss detected")
                     
                     ## visualization
@@ -381,6 +401,8 @@ class Trainer(object):
                     traceback.print_exc()
                     continue
             
+            pbar.close()
+
             # 打印epoch总结
             avg_train_loss = train_loss / len(train_dataloader)
             avg_depth_loss = train_depth_all_loss / len(train_dataloader)
@@ -446,7 +468,12 @@ class Trainer(object):
         use_wandb = self.config['wandb']['enable']
         
         with torch.no_grad():
-            pbar = tqdm(val_dataloader, desc="Validation")
+            # pbar = tqdm(val_dataloader, desc="Validation")
+
+            ## ========== 使用优化的验证进度条 ==========
+            pbar = create_val_progress_bar(val_dataloader)
+            ## ========================================
+
             for index, data in enumerate(pbar):
                 try:
                     rgb = data['rgb'].to(self.device)
@@ -504,7 +531,12 @@ class Trainer(object):
                         IoU_all.append(IoU)
                         mAP_all.append(mAP)
 
-                    pbar.set_postfix({'val_loss': f'{val_loss/(index+1):.6f}'})
+                    # pbar.set_postfix({'val_loss': f'{val_loss/(index+1):.6f}'})
+
+                    ## ========== 更新进度条（降低频率） ==========
+                    if index % 10 == 0:
+                        pbar.set_postfix({'val_loss': f'{val_loss/(index+1):.6f}'})
+                    ## ==========================================
                     
                     ## 保存第一个batch用于可视化
                     if index == 0:
@@ -518,6 +550,10 @@ class Trainer(object):
                 except Exception as e:
                     print(f"Error in validation batch {index}: {e}")
                     continue
+            
+            ## ========== 关闭进度条 ==========
+            pbar.close()
+            ## ==============================
 
             # 计算平均指标
             val_loss_avg = val_loss / val_size

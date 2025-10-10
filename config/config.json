@@ -11,7 +11,8 @@
         "read":"projection",
         "resample_dim":256,
         "pretrain":true,
-        "patch_size":16
+        "patch_size":16,
+        "coord_reduction": 32
     },
 
     "Trainer":{
@@ -108,8 +109,9 @@
     },
 
     "wandb":{
-        "enable":true,
-        "username":"Modify here",
+        "enable":false,
+        "project_name": "MODEST-CoordAtt", 
+        "username":"h2044160947-northeastern-university",
         "images_to_show":3,
         "im_h":480,
         "im_w":640
