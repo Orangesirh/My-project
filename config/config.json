@@ -13,6 +13,7 @@
         "pretrain":true,
         "patch_size":16,
         "coord_reduction": 32
+        
     },
 
     "Trainer":{
@@ -38,8 +39,8 @@
     "Dataset":{
         "dataset_name":"syntodd",
         "syntodd":{
-            "batch_size":4,
-            "num_workers":2,
+            "batch_size":8,
+            "num_workers":4,
             "in_chans":3,
             "num_multiview":2,
             "train_num_samples":56,

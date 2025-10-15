@@ -178,8 +178,9 @@ class Trainer(object):
             
             self.model.train()
             #pbar = tqdm(train_dataloader, desc="Training")
-            
+            ## ========== 使用优化的进度条 ========== 
             pbar = create_train_progress_bar(train_dataloader, epoch=epoch+1)
+            ## ====================================
 
             for index, data in enumerate(pbar):
                 try:
@@ -400,9 +401,10 @@ class Trainer(object):
                     import traceback
                     traceback.print_exc()
                     continue
-            
+            ## ========== 关闭进度条 ==========
             pbar.close()
-
+            ## ==============================
+            
             # 打印epoch总结
             avg_train_loss = train_loss / len(train_dataloader)
             avg_depth_loss = train_depth_all_loss / len(train_dataloader)
