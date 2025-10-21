@@ -343,8 +343,13 @@ class Trainer(object):
                     total_loss.backward()
                     
                     # 梯度裁剪（可选）
-                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
+                    # torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                     
+                    torch.nn.utils.clip_grad_norm_(
+                        self.model.parameters(), 
+                        max_norm=1.0  # 将梯度范数限制在1.0以内
+                    )
+
                     self.optimizer_scratch.step()
                     self.optimizer_backbone.step()
 

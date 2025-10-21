@@ -29,8 +29,8 @@
         "depth_normal_multi":1.0,
         "depth_error_multi":1.0,
         "optim":"adam",
-        "lr_backbone":1e-5,
-        "lr_scratch":3e-4,
+        "lr_backbone":1.5e-5,
+        "lr_scratch":6e-4,
         "momentum":0.9,
         "seed":0
          
