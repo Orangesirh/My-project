@@ -12,7 +12,9 @@
         "resample_dim":256,
         "pretrain":true,
         "patch_size":16,
-        "coord_reduction": 32
+        "coord_reduction": 32,
+        "use_triplet": true,
+        "use_final_sa": false
         
     },
 
@@ -22,7 +24,8 @@
         "loss_segmentation":"ce",
         "ckpt_path":"./ckpt/ISGNet_syntodd.p",
         "gamma": 0.33,
-        "seg_multi":0.1,
+
+        "seg_multi":0.11,
         "depth_multi":1.0,
         "depth_scale_multi":1.0,
         "depth_grad_multi":1.0,

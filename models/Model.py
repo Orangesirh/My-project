@@ -31,7 +31,9 @@ class ISGNet(nn.Module):
                  pretrain           = True,
                  iterations         = 3,
                  in_chans           = 3,
-                 coord_reduction    = 32):
+                 coord_reduction    = 32,
+                 use_triplet        = True,      # 新增：是否启用TripletAttention
+                 use_final_sa       = False):    # 新增：是否使用最终SA
         """
         type : {"full", "depth", "seg"}
         image_size : (c, h, w)
@@ -61,7 +63,13 @@ class ISGNet(nn.Module):
             self.reassembles.append(Reassemble(image_size, read, patch_size, s, emb_dim, resample_dim))
             # 添加coord_reduction参数
             coord_reduction = 32  # 或从config中读取
-            self.fusions.append(Fusion(resample_dim, nclasses, coord_reduction=coord_reduction))
+            self.fusions.append(Fusion(
+                resample_dim=resample_dim, 
+                nclasses=nclasses, 
+                coord_reduction=coord_reduction,
+                use_triplet=use_triplet,      # 新增
+                use_final_sa=use_final_sa     # 新增
+            ))
 
         self.reassembles = nn.ModuleList(self.reassembles)
         self.fusions = nn.ModuleList(self.fusions)

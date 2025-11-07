@@ -18,6 +18,8 @@ from utils.evaluate import compute_depth_metrics, compute_seg_metrics
 
 from utils.progress import create_train_progress_bar, create_val_progress_bar, safe_write
 
+from utils.enhanced_seg_loss import EnhancedSegmentationLoss
+
 
 class Trainer(object):
 
@@ -64,7 +66,9 @@ class Trainer(object):
                     pretrain    =   config['Model']['pretrain'],
                     iterations  =   config['Model']['iterations'],
                     in_chans    =   config['Dataset'][self.dataset_name]["in_chans"],
-                    coord_reduction = config['Model'].get('coord_reduction', 32)  # ← 新增，默认32
+                    coord_reduction = config['Model'].get('coord_reduction', 32),  # ← 新增，默认32
+                    use_triplet     = config['Model'].get('use_triplet', True),      # 新增
+                    use_final_sa    = config['Model'].get('use_final_sa', False) 
         )
 
         self.model.to(self.device)
@@ -72,7 +76,7 @@ class Trainer(object):
 
         ## loss functions
         self.loss_depth, self.loss_depth_grad, self.loss_depth_normal, self.loss_seg, self.loss_seg_iou = get_losses(config)
-        
+
         # Debug: 打印损失函数类型和检查是否为NoneFunction
         print(f"损失函数初始化: depth={self.loss_depth}, seg={self.loss_seg}")
         
