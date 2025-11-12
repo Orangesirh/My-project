@@ -18,7 +18,7 @@ from utils.evaluate import compute_depth_metrics, compute_seg_metrics
 
 from utils.progress import create_train_progress_bar, create_val_progress_bar, safe_write
 
-from utils.enhanced_seg_loss import EnhancedSegmentationLoss
+# from utils.enhanced_seg_loss import EnhancedSegmentationLoss
 
 
 class Trainer(object):

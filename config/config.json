@@ -21,11 +21,17 @@
     "Trainer":{
         "epochs":40,
         "loss_depth":"mse+normal+grad",
-        "loss_segmentation":"ce",
-        "ckpt_path":"./ckpt/ISGNet_syntodd.p",
+        "loss_segmentation":"enhanced",
+        "ckpt_path":"./ckpt/ISGNet_syntodd_enhanced.p",
         "gamma": 0.33,
 
-        "seg_multi":0.11,
+        "seg_multi":0.15,
+        "seg_edge_weight": 2.0,
+        "seg_transparent_weight": 1.5,
+        "use_edge_aware": true,
+        "use_transparent_focus": true,
+
+
         "depth_multi":1.0,
         "depth_scale_multi":1.0,
         "depth_grad_multi":1.0,
@@ -42,8 +48,8 @@
     "Dataset":{
         "dataset_name":"syntodd",
         "syntodd":{
-            "batch_size":8,
-            "num_workers":4,
+            "batch_size":6,
+            "num_workers":12,
             "in_chans":3,
             "num_multiview":2,
             "train_num_samples":56,

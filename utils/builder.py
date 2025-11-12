@@ -12,6 +12,7 @@ from utils.loss import *
 from datasets.syntodd import SynTodd
 from datasets.clearpose import ClearPose
 
+from utils.enhanced_seg_loss import EnhancedSegmentationLoss
     
 
 def multiview_collate(batch):
@@ -49,7 +50,9 @@ def get_dataloader(config, mode):
             num_workers=num_workers,
             pin_memory=True,
             shuffle=shuffle,
-            drop_last=True
+            drop_last=True,
+            persistent_workers=True if num_workers > 0 else False,  # ← 新增！
+            prefetch_factor=4  # ← 新增！每个worker预取4个batch
             )
 
 
@@ -107,10 +110,28 @@ def get_losses(config):
         print("Initializing segmentation losses...")
         
         # 主要分割损失
-        if 'ce' in loss_seg_type:
+        # if 'ce' in loss_seg_type:
+        #     loss_segmentation = nn.CrossEntropyLoss()
+        #     print("  - CrossEntropy segmentation loss initialized")
+
+        # ========== 关键修改：支持增强分割损失 ==========
+        if 'enhanced' in loss_seg_type:
+            # 使用增强分割损失
+            loss_segmentation = EnhancedSegmentationLoss(
+                edge_weight=config['Trainer'].get('seg_edge_weight', 2.0),
+                transparent_class=2,  # syntodd数据集中透明物体是class 2
+                transparent_weight=config['Trainer'].get('seg_transparent_weight', 1.5),
+                num_classes=num_classes,
+                use_edge=config['Trainer'].get('use_edge_aware', True),
+                use_transparent_focus=config['Trainer'].get('use_transparent_focus', True)
+            )
+            print("  - Enhanced segmentation loss initialized (Edge + Transparent Focus)")
+        elif 'ce' in loss_seg_type:
+            # 使用基础CE损失
             loss_segmentation = nn.CrossEntropyLoss()
             print("  - CrossEntropy segmentation loss initialized")
-        
+        # ================================================
+
         # IoU损失
         if 'iou' in loss_seg_type:
             loss_seg_iou = SegIouLoss(num_classes)
