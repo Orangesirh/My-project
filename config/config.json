@@ -2,7 +2,7 @@
     "Model":{
         "device":"cuda",
         "type":"full",
-        "path_model":"The dir to save ckpt",
+        "path_model":"ckpt/MODEST_EDS_Fusion",
         "iterations": 3,
         "path_predicted_images":"output",
         "model_timm":"vit_base_patch16_384",
@@ -13,19 +13,19 @@
         "pretrain":true,
         "patch_size":16,
         "coord_reduction": 32,
-        "use_triplet": true,
-        "use_final_sa": false
+        "use_eds_at_finest": true
+        
         
     },
 
     "Trainer":{
         "epochs":40,
         "loss_depth":"mse+normal+grad",
-        "loss_segmentation":"enhanced",
+        "loss_segmentation":"enhanced",  
         "ckpt_path":"./ckpt/ISGNet_syntodd_enhanced.p",
         "gamma": 0.33,
 
-        "seg_multi":0.15,
+        "seg_multi":0.1,
         "seg_edge_weight": 2.0,
         "seg_transparent_weight": 1.5,
         "use_edge_aware": true,
@@ -48,8 +48,8 @@
     "Dataset":{
         "dataset_name":"syntodd",
         "syntodd":{
-            "batch_size":6,
-            "num_workers":12,
+            "batch_size":8,
+            "num_workers":4,
             "in_chans":3,
             "num_multiview":2,
             "train_num_samples":56,

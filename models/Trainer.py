@@ -5,6 +5,7 @@ import numpy as np
 import wandb
 import cv2
 import torch.nn.functional as F
+import datetime
 
 from torchvision import transforms
 from PIL import Image
@@ -67,8 +68,7 @@ class Trainer(object):
                     iterations  =   config['Model']['iterations'],
                     in_chans    =   config['Dataset'][self.dataset_name]["in_chans"],
                     coord_reduction = config['Model'].get('coord_reduction', 32),  # ← 新增，默认32
-                    use_triplet     = config['Model'].get('use_triplet', True),      # 新增
-                    use_final_sa    = config['Model'].get('use_final_sa', False) 
+                    use_eds_at_finest=config['Model'].get('use_eds_at_finest', True)  # ← 添加这行
         )
 
         self.model.to(self.device)
@@ -645,6 +645,30 @@ class Trainer(object):
                     f.write(f"Epoch validation - mAP: {mAP_mean:.5f} \t IoU: {IOU_mean:.5f} \n")
             else:
                 seg_eval = val_loss_avg
+            # ========== 新增：写入完整统计信息到文件 ==========
+            import datetime
+            with open(self.path_statis, 'a') as f:
+                timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                f.write(f"\n{'='*80}\n")
+                f.write(f"Validation @ {timestamp}\n")
+                f.write(f"{'='*80}\n")
+    
+                # 损失
+                f.write(f"Loss: Total={val_loss_avg:.6f}, Depth={val_depth_loss_avg:.6f}, Seg={val_seg_loss_avg:.6f}\n")
+    
+                # 深度指标
+                if len(MAE_all) > 0:
+                    f.write(f"\nDepth (Overall): RMSE={RMSE_mean:.4f}, MAE={MAE_mean:.4f}, REL={REL_mean:.4f}\n")
+                    f.write(f"  Accuracy: δ<1.05={DELTA105_mean:.2f}%, δ<1.10={DELTA110_mean:.2f}%, δ<1.25={DELTA125_mean:.2f}%\n")
+                    f.write(f"Depth (Transparent): RMSE={RMSE_mask_mean:.4f}, MAE={MAE_mask_mean:.4f}, REL={REL_mask_mean:.4f}\n")
+                    f.write(f"  Accuracy: δ<1.05={DELTA105_mask_mean:.2f}%, δ<1.10={DELTA110_mask_mean:.2f}%, δ<1.25={DELTA125_mask_mean:.2f}%\n")
+    
+                # 分割指标
+                if len(IoU_all) > 0:
+                    f.write(f"Segmentation: mAP={mAP_mean:.4f}, IoU={IOU_mean:.4f}\n")
+    
+                f.write(f"{'='*80}\n")
+            # ====================================================
 
         return val_loss_avg, depth_eval, seg_eval
 
