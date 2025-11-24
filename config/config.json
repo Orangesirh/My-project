@@ -25,7 +25,7 @@
         "ckpt_path":"./ckpt/ISGNet_syntodd_enhanced.p",
         "gamma": 0.33,
 
-        "seg_multi":0.1,
+        "seg_multi":0.12,
         "seg_edge_weight": 2.0,
         "seg_transparent_weight": 1.5,
         "use_edge_aware": true,
@@ -49,7 +49,7 @@
         "dataset_name":"syntodd",
         "syntodd":{
             "batch_size":8,
-            "num_workers":4,
+            "num_workers":12,
             "in_chans":3,
             "num_multiview":2,
             "train_num_samples":56,
