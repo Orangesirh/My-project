@@ -31,7 +31,9 @@ class ISGNet(nn.Module):
                  iterations         = 3,
                  in_chans           = 3,
                  coord_reduction    = 32,
-                 use_eds_at_finest  = True):
+                 use_eds_at_finest  = True,
+                 use_msda           = False,
+                 msda_config        = None):
         """
         ISGNet模型（集成EDS-Fusion）
         
@@ -62,18 +64,53 @@ class ISGNet(nn.Module):
         ## Reassemble + Fusion
         self.reassembles = []
         self.fusions = []
+
+        # 打印配置信息
+        print("\n" + "="*60)
+        print("ISGNet Fusion Configuration:")
+        print(f"  - resample_dim: {resample_dim}")
+        print(f"  - use_eds_at_finest: {use_eds_at_finest}")
+        print(f"  - use_msda: {use_msda}")
+        if msda_config:
+            print(f"  - msda_dilation_rates: {msda_config.get('dilation_rates', {})}")
+        print("="*60 + "\n")
       
-        for s in reassemble_s:
-            # Reassemble模块
+        for idx, s in enumerate(reassemble_s):  # idx: 0,1,2,3
+            # Reassemble模块（保持不变）
             self.reassembles.append(Reassemble(image_size, read, patch_size, s, emb_dim, resample_dim))
             
-            # Fusion模块（传递use_eds_at_finest参数）
+            # ===== 确定当前层是否使用MSDA ===== ✅
+            # 注意：reassemble_s = [4, 8, 16, 32]
+            # 对应的index在forward中是：3, 2, 1, 0（倒序）
+            # 所以 idx=0→index=3, idx=1→index=2, idx=2→index=1, idx=3→index=0
+            
+            fusion_index = 3 - idx  # 转换：idx→实际的pyramid index
+            
+            use_msda_current = False
+            msda_dilation = None
+            
+            # 粗尺度（index=1,2,3）使用MSDA
+            if use_msda and msda_config and fusion_index in [1, 2, 3]:
+                use_msda_current = True
+                msda_dilation = msda_config['dilation_rates'].get(str(fusion_index))
+            
+            # 最细尺度（index=0）使用EDS
+            use_eds_current = (fusion_index == 0 and use_eds_at_finest)
+            
+            # Fusion模块（传入MSDA参数）✅
             self.fusions.append(Fusion(
                 resample_dim=resample_dim, 
                 nclasses=nclasses, 
                 coord_reduction=coord_reduction,
-                use_eds_at_finest=use_eds_at_finest
+                use_eds_at_finest=use_eds_current,
+                use_msda=use_msda_current,        # ✅ 新增
+                msda_dilation=msda_dilation       # ✅ 新增
             ))
+            
+            # 打印每层配置
+            print(f"[Fusion {idx}] pyramid_index={fusion_index}, "
+                  f"use_msda={use_msda_current}, dilation={msda_dilation}, "
+                  f"use_eds={use_eds_current}")
 
         self.reassembles = nn.ModuleList(self.reassembles)
         self.fusions = nn.ModuleList(self.fusions)

@@ -14,6 +14,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from models.msda import MultiScaleDilatedAttention
 
 # ==================== CoordinateAttention（完全保留）====================
 
@@ -316,11 +317,17 @@ class Fusion(nn.Module):
     3. ✅ 可学习的融合权重
     4. ✅ 优化的EdgeExtractor
     """
-    def __init__(self, resample_dim, nclasses, coord_reduction=32, 
-                 use_eds_at_finest=True):
+    def __init__(self, 
+                 resample_dim, 
+                 nclasses,                    # 保持原有参数
+                 coord_reduction=32,          # 保持原有参数
+                 use_eds_at_finest=True,      # 保持原有参数
+                 use_msda=False,              # ✅ 新增：是否使用MSDA
+                 msda_dilation=None):         # ✅ 新增：MSDA的膨胀率):
         super(Fusion, self).__init__()
         
         self.use_eds_at_finest = use_eds_at_finest
+        self.use_msda = use_msda  # ✅ 新增
         
         # ===== Stage 1: 残差卷积单元 =====
         self.res_conv1 = ResidualConvUnit(resample_dim)
@@ -363,9 +370,29 @@ class Fusion(nn.Module):
         if use_eds_at_finest:
             self.eds_fusion = EDSFusion(channels=resample_dim)
         
-        # 简单SA（用于粗尺度）
-        self.sa_depth = SpatialAttention()
-        self.sa_seg = SpatialAttention()
+       # 4.2 MSDA（粗尺度，新增）✅
+        if use_msda and msda_dilation is not None:
+            print(f"[Fusion] Initializing MSDA with dilation={msda_dilation}, dim={resample_dim}")
+            self.msda_depth = MultiScaleDilatedAttention(
+                dim=resample_dim,
+                num_heads=8,
+                kernel_size=3,
+                dilation=msda_dilation,
+                attn_drop=0.1,
+                proj_drop=0.1
+            )
+            self.msda_seg = MultiScaleDilatedAttention(
+                dim=resample_dim,
+                num_heads=8,
+                kernel_size=3,
+                dilation=msda_dilation,
+                attn_drop=0.1,
+                proj_drop=0.1
+            )
+        else:
+            # 4.3 简单SA（fallback，已有）
+            self.sa_depth = SpatialAttention()
+            self.sa_seg = SpatialAttention()
         
     def forward(self, reassemble, index, previous_depth=None, previous_seg=None, 
                 out_depths=None, out_segs=None):
@@ -410,18 +437,33 @@ class Fusion(nn.Module):
         output_depth_ca = output_depth * seg_coord_attn
 
         ## ========== Stage 4: 空间注意力 ==========
+        # 策略：
+        # - index=0 (最细尺度96×96): 使用EDS-Fusion（边缘优化）
+        # - index=1,2,3 (粗尺度): 使用MSDA（多尺度全局建模）
+        
         if self.use_eds_at_finest and index == 0:
-            # 最细尺度：使用修复版EDS-Fusion
+            # ===== 最细尺度：EDS-Fusion =====
             depth_spatial_attn = self.eds_fusion(output_depth_ca)
             seg_spatial_attn = self.eds_fusion(output_seg_ca)
+            
+            # 应用attention map
+            output_seg = output_seg_ca * depth_spatial_attn
+            output_depth = output_depth_ca * seg_spatial_attn
+        
+        elif self.use_msda and index in [1, 2, 3]:
+            # ===== 粗尺度：MSDA直接特征变换 =====
+            # 注意：MSDA不生成attention map，直接输出增强特征
+            output_depth = self.msda_depth(output_depth_ca)
+            output_seg = self.msda_seg(output_seg_ca)
+        
         else:
-            # 粗尺度：使用简单SA（保持效率）
+            # ===== Fallback：简单SA =====
             depth_spatial_attn = self.sa_depth(output_depth_ca)
             seg_spatial_attn = self.sa_seg(output_seg_ca)
-        
-        # 应用空间注意力
-        output_seg = output_seg_ca * depth_spatial_attn
-        output_depth = output_depth_ca * seg_spatial_attn
+            
+            # 应用attention map
+            output_seg = output_seg_ca * depth_spatial_attn
+            output_depth = output_depth_ca * seg_spatial_attn
         
         ## ========== Stage 5: 上采样到下一尺度 ==========
         output_seg = nn.functional.interpolate(

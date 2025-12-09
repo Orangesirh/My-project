@@ -13,7 +13,17 @@
         "pretrain":true,
         "patch_size":16,
         "coord_reduction": 32,
-        "use_eds_at_finest": true
+        "use_eds_at_finest": true,
+        "use_msda": true,
+        "msda_config": {
+            "dilation_rates": {
+                "3": [4, 8, 16],
+                "2": [2, 4, 8],
+                "1": [1, 2, 4]
+            },
+            "num_heads": 8,
+            "kernel_size": 3
+        }
         
         
     },
@@ -25,14 +35,14 @@
         "ckpt_path":"./ckpt/ISGNet_syntodd_enhanced.p",
         "gamma": 0.33,
 
-        "seg_multi":0.12,
+        "seg_multi":0.1,
         "seg_edge_weight": 2.0,
         "seg_transparent_weight": 1.5,
         "use_edge_aware": true,
         "use_transparent_focus": true,
 
 
-        "depth_multi":1.0,
+        "depth_multi":1.1,
         "depth_scale_multi":1.0,
         "depth_grad_multi":1.0,
         "depth_normal_multi":1.0,
@@ -49,7 +59,7 @@
         "dataset_name":"syntodd",
         "syntodd":{
             "batch_size":8,
-            "num_workers":12,
+            "num_workers":4,
             "in_chans":3,
             "num_multiview":2,
             "train_num_samples":56,
