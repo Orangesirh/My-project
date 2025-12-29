@@ -224,7 +224,8 @@ class Trainer(object):
                     ## calculate multi-scale depth losses
                     if self.has_depth_loss or self.has_depth_grad_loss or self.has_depth_normal_loss:
                         for iter_idx, output_depths_iter in enumerate(output_depths):
-                            iter_weight = self.gamma * (iter_idx + 1)  # 修正迭代权重计算
+                            # iter_weight = self.gamma * (iter_idx + 1)  # 修正迭代权重计算
+                            iter_weight = 1.0
                             
                             for scale_idx, (output_depth, resolution) in enumerate(zip(output_depths_iter, self.resolutions)):
                                 # 准备对应尺度的ground truth
@@ -282,7 +283,8 @@ class Trainer(object):
                     ## calculate multi-scale segmentation losses
                     if self.has_seg_loss or self.has_seg_iou_loss:
                         for iter_idx, output_segs_iter in enumerate(output_segs):
-                            iter_weight = self.gamma * (iter_idx + 1)
+                            # iter_weight = self.gamma * (iter_idx + 1)
+                            iter_weight=1.0
                             
                             for scale_idx, (output_seg, resolution) in enumerate(zip(output_segs_iter, self.resolutions)):
                                 # 准备对应尺度的ground truth

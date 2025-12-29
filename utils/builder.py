@@ -186,6 +186,22 @@ def get_optimizer(config, net):
         optimizer_scratch = optim.SGD(params_scratch, lr=config['Trainer']['lr_scratch'], momentum=config['Trainer']['momentum'])
     return optimizer_backbone, optimizer_scratch
 
-
 def get_schedulers(optimizers):
-    return [ReduceLROnPlateau(optimizer) for optimizer in optimizers]
+    """改进的学习率调度器"""
+    schedulers = []
+    for optimizer in optimizers:
+        scheduler = ReduceLROnPlateau(
+            optimizer,
+            mode='min',
+            factor=0.5,
+            patience=5,        # ✅ 改为5（从默认10）
+            verbose=True,
+            threshold=0.01,    # ✅ 新增（忽略<1%的假改进）
+            min_lr=1e-7
+        )
+        schedulers.append(scheduler)
+    return schedulers
+
+
+# def get_schedulers(optimizers):
+#     return [ReduceLROnPlateau(optimizer) for optimizer in optimizers]

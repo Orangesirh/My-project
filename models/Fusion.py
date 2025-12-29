@@ -1,20 +1,11 @@
-"""
-Fusion Module with EDS-Fusion Integration - FIXED VERSION
-修复了Global-SAM实现错误的完整版
-
-关键修复：
-1. ✅ Global-SAM现在能真正提供全局上下文
-2. ✅ 残差融合替代硬截断
-3. ✅ Sobel初始化边缘提取器
-4. ✅ 可学习的融合权重
-"""
-
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
 from models.msda import MultiScaleDilatedAttention
+from models.dcca import DCCA
+
 
 # ==================== CoordinateAttention（完全保留）====================
 
@@ -311,11 +302,6 @@ class Fusion(nn.Module):
     Stage 3: EDS-Fusion (空间级：多尺度+边缘，修复了Global-SAM)
     Stage 4: 残差连接和上采样
     
-    修复内容：
-    1. ✅ Global-SAM现在真正提供全局上下文
-    2. ✅ 残差融合替代硬截断
-    3. ✅ 可学习的融合权重
-    4. ✅ 优化的EdgeExtractor
     """
     def __init__(self, 
                  resample_dim, 
@@ -354,19 +340,33 @@ class Fusion(nn.Module):
         self.gate_depth = GGA(resample_dim)
         self.gate_seg = GGA(resample_dim)
 
-        # ===== Stage 3: CoordinateAttention（语义级）=====
-        self.coord_att_depth = CoordinateAttention(
+        # # ===== Stage 3: CoordinateAttention（语义级）=====
+        # self.coord_att_depth = CoordinateAttention(
+        #     inp=resample_dim, 
+        #     oup=resample_dim, 
+        #     reduction=coord_reduction
+        # )
+        # self.coord_att_seg = CoordinateAttention(
+        #     inp=resample_dim, 
+        #     oup=resample_dim, 
+        #     reduction=coord_reduction
+        # )
+        # ===== Stage 3: DCCA（改进的CoordinateAttention）=====
+        self.coord_att_depth = DCCA(
             inp=resample_dim, 
             oup=resample_dim, 
             reduction=coord_reduction
+           
         )
-        self.coord_att_seg = CoordinateAttention(
+        self.coord_att_seg = DCCA(
             inp=resample_dim, 
             oup=resample_dim, 
             reduction=coord_reduction
+            
         )
+
         
-        # ===== Stage 4: EDS-Fusion（空间级，修复版）=====
+        # ===== Stage 4: EDS-Fusion（空间级）=====
         if use_eds_at_finest:
             self.eds_fusion = EDSFusion(channels=resample_dim)
         

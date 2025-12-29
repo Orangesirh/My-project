@@ -3,7 +3,7 @@
         "device":"cuda",
         "type":"full",
         "path_model":"ckpt/MODEST_EDS_Fusion",
-        "iterations": 3,
+        "iterations": 1,
         "path_predicted_images":"output",
         "model_timm":"vit_base_patch16_384",
         "emb_dim":768,
@@ -32,7 +32,7 @@
         "epochs":40,
         "loss_depth":"mse+normal+grad",
         "loss_segmentation":"enhanced",  
-        "ckpt_path":"./ckpt/ISGNet_syntodd_enhanced.p",
+        "ckpt_path":"./ckpt/ckpt/MODEST_EDS_Fusion/ISGNet_best.p",
         "gamma": 0.33,
 
         "seg_multi":0.1,
@@ -42,7 +42,7 @@
         "use_transparent_focus": true,
 
 
-        "depth_multi":1.1,
+        "depth_multi":1.0,
         "depth_scale_multi":1.0,
         "depth_grad_multi":1.0,
         "depth_normal_multi":1.0,
