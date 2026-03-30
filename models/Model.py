@@ -1,17 +1,12 @@
 """
 ISGNet Model - 单轮迭代版本
 
-相对原版的修改：
-  1. 删除 use_msda / msda_config 参数（MSDA 模块已移除）
-  2. 修复 EDS-Fusion 索引倒置 bug
-       原代码：fusion_index = 3 - idx，再判断 fusion_index == 0
-               → EDS 被安装在 s=32（12×12 最粗）的 Fusion 上
-               → 最细尺度（s=4, 96×96）的 Fusion 反而没有 EDS
-       修复后：直接判断 idx == 0
-               → idx=0（s=4,  96×96）使用 EDS-Fusion  ✓
-               → idx=1（s=8,  48×48）使用 SpatialAttention
-               → idx=2（s=16, 24×24）使用 SpatialAttention
-               → idx=3（s=32, 12×12）使用 SpatialAttention
+修复：EDS-Fusion 索引倒置 bug
+  原代码：fusion_index = 3 - idx，再判断 == 0
+          → EDS 被安装在 s=32（12×12 最粗）的 Fusion 上
+  修复后：直接判断 idx == 0
+          → idx=0（s=4, 96×96）使用 EDS-Fusion
+          → idx=1/2/3 使用 SpatialAttention
 """
 
 import numpy as np
@@ -64,7 +59,7 @@ class ISGNet(nn.Module):
         print(f"  iterations       : {iterations}")
         print(f"  resample_dim     : {resample_dim}")
         print(f"  use_eds_at_finest: {use_eds_at_finest}")
-        print(f"  EDS 尺度分配:")
+        print(f"  Stage4 分配:")
         print(f"    idx=0  s=4   96×96  → {'EDS-Fusion' if use_eds_at_finest else 'SpatialAttention'}")
         print(f"    idx=1  s=8   48×48  → SpatialAttention")
         print(f"    idx=2  s=16  24×24  → SpatialAttention")
@@ -76,7 +71,7 @@ class ISGNet(nn.Module):
                 Reassemble(image_size, read, patch_size, s, emb_dim, resample_dim)
             )
 
-            # 最细尺度（idx=0, 96×96）使用 EDS-Fusion，其余三个尺度使用 SpatialAttention
+            # idx=0（96×96）使用 EDS-Fusion，其余用 SpatialAttention
             use_eds_current = use_eds_at_finest and (idx == 0)
 
             self.fusions.append(Fusion(
@@ -104,30 +99,20 @@ class ISGNet(nn.Module):
         print(f"✓ Model initialized with {total_params:,} parameters")
 
     def forward(self, img):
-        """
-        输入:  img (B, C, H, W)
-        输出:  out_depths, out_segs
-               各为长度=1 的列表（单轮迭代），内含 4 个尺度的预测
-        """
         t = self.transformer_encoders(img)
 
         depth_feature, seg_feature   = None, None
         multiscale_depth, multiscale_seg = [], []
 
-        # 从粗到细：i = 3, 2, 1, 0
         for i in np.arange(len(self.fusions) - 1, -1, -1):
             hook_to_take      = 't' + str(self.hooks[i])
             activation_result = self.activation[hook_to_take]
-
             reassemble_result = self.reassembles[i](activation_result)
 
             depth_feature, seg_feature = self.fusions[i](
-                reassemble_result,
-                i,
-                depth_feature,
-                seg_feature,
-                [],
-                []
+                reassemble_result, i,
+                depth_feature, seg_feature,
+                [], []
             )
 
             output_depth, output_seg = self.head_multiscale(
@@ -136,17 +121,13 @@ class ISGNet(nn.Module):
             multiscale_depth.append(output_depth)
             multiscale_seg.append(output_seg)
 
-        out_depths = [multiscale_depth]
-        out_segs   = [multiscale_seg]
-
-        return out_depths, out_segs
+        return [multiscale_depth], [multiscale_seg]
 
     def _get_layers_from_hooks(self, hooks):
         def get_activation(name):
             def hook(model, input, output):
                 self.activation[name] = output
             return hook
-
         for h in hooks:
             self.transformer_encoders.blocks[h].register_forward_hook(
                 get_activation('t' + str(h))

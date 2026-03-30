@@ -33,11 +33,11 @@ class CoordinateAttention(nn.Module):
         self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
         self.pool_w = nn.AdaptiveAvgPool2d((1, None))
         mip = max(8, inp // reduction)
-        self.conv1   = nn.Conv2d(inp, mip, kernel_size=1, stride=1, padding=0)
-        self.bn1     = nn.BatchNorm2d(mip)
-        self.act     = h_swish()
-        self.conv_h  = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
-        self.conv_w  = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
+        self.conv1  = nn.Conv2d(inp, mip, kernel_size=1, stride=1, padding=0)
+        self.bn1    = nn.BatchNorm2d(mip)
+        self.act    = h_swish()
+        self.conv_h = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
+        self.conv_w = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
 
     def forward(self, x):
         identity = x
@@ -58,10 +58,7 @@ class CoordinateAttention(nn.Module):
 # ==================== SpatialAttention（粗尺度 fallback）====================
 
 class SpatialAttention(nn.Module):
-    """
-    简单空间注意力。
-    用于粗尺度（index=2: 24×24，index=3: 12×12）。
-    """
+    """简单空间注意力，用于粗尺度（index=1,2,3）。"""
     def __init__(self):
         super(SpatialAttention, self).__init__()
         self.conv1   = nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False)
@@ -82,7 +79,7 @@ class EdgeExtractor(nn.Module):
 
     流程：
       1. channel_reduce: 1×1 卷积将 256 通道压缩到 8 通道（可学习）。
-         目的：避免 Conv2d(256→2) 时 256 个通道叠加求和导致
+         目的：避免 Conv2d(256→2) 时 256 通道叠加求和导致
                高激活通道主导梯度响应，Sobel 语义失效。
       2. sobel_conv: 对 8 通道特征做 Sobel 边缘检测（权重冻结，不可学习）。
          固定 Sobel 算子整个训练过程始终保持真正的梯度检测语义，
@@ -92,7 +89,7 @@ class EdgeExtractor(nn.Module):
     参数量：
       channel_reduce: 256×8 = 2,048
       sobel_conv:     8×2×9 = 144（冻结，不参与优化）
-      edge_enhance:   2×8×9 + 8×1 = 152 + 16(BN) + 9 = 177
+      edge_enhance:   2×8×9 + 16(BN) + 9 = 177
       合计可训练参数: 2,048 + 177 = 2,225
     """
     def __init__(self, in_channels=256, reduce_channels=8):
@@ -118,14 +115,12 @@ class EdgeExtractor(nn.Module):
                 self.sobel_conv.weight.data[0, i] = sobel_kx
                 self.sobel_conv.weight.data[1, i] = sobel_ky
 
-        # 冻结 Sobel 算子：权重不参与梯度更新，整个训练过程始终保持真正的
-        # 边缘检测语义，与 SE-MDE (Zuo et al., CVIU 2025) 的固定 Sobel 设计一致。
-        # channel_reduce 和 edge_enhance 保持可学习，负责特征投影与任务适应。
+        # 冻结 Sobel 算子：整个训练过程保持真正的边缘检测语义
         self.sobel_conv.weight.requires_grad = False
 
         # Step 3: 梯度图融合为单通道边缘响应
         self.edge_enhance = nn.Sequential(
-            nn.Conv2d(2, 8, kernel_size=3, padding=1, bias=False),
+            nn.Conv2d(2, 8, kernel_size=3, padding=1, bias=False),  # 后接BN，不需要bias
             nn.BatchNorm2d(8),
             nn.ReLU(inplace=True),
             nn.Conv2d(8, 1, kernel_size=1),
@@ -139,25 +134,19 @@ class EdgeExtractor(nn.Module):
         return edge_map
 
 
-# ==================== EDSFusion（双路精简版）====================
+# ==================== EDSFusion（双路版）====================
 
 class EDSFusion(nn.Module):
     """
     EDS-Fusion: Enhanced Dual-Scale Spatial Attention with Edge Guidance
 
-    双路并行注意力（精简自原三路版本，删除与 DCCA 重叠的 Local-SAM）：
-      1. Global-SAM : 压缩到 4×4 再双线性上采样，保留全局空间变化能力，
-                      针对透明物体全局光线折射建模。
-      2. Edge-SAM   : Sobel 初始化边缘提取，针对透明物体边界模糊问题。
+    双路并行注意力：
+      1. Global-SAM : 压缩到 4×4 再双线性上采样，保留全局空间变化能力。
+                      修复原版 AdaptiveAvgPool2d(1) 导致单一标量广播的失效问题。
+      2. Edge-SAM   : 固定 Sobel 算子 + 可学习融合，针对透明物体边界。
 
     仅用于最细尺度（idx=0: 96×96）。
     深度分支与分割分支在 Fusion 类中各自实例化，权重不共享。
-
-    设计说明：
-      原三路版本中的 Local-SAM 与上游 DCCA（Stage 3）在功能上高度重叠，
-      均为 channel-pooled 空间注意力，删除后不影响性能且 ablation 更清晰。
-      原 Global-SAM 使用 AdaptiveAvgPool2d(1) 导致全空间输出单一标量，
-      空间注意力完全失效；新版改为压缩到 4×4 后上采样，修复此问题。
     """
     def __init__(self, channels=256):
         super(EDSFusion, self).__init__()
@@ -166,7 +155,7 @@ class EDSFusion(nn.Module):
         self.global_branch = nn.Sequential(
             nn.Conv2d(channels, channels // 4, kernel_size=1),
             nn.ReLU(inplace=True),
-            nn.AdaptiveAvgPool2d(4),               # 压缩到 4×4 保留空间结构
+            nn.AdaptiveAvgPool2d(4),           # 压缩到 4×4 保留空间结构
             nn.Conv2d(channels // 4, 1, kernel_size=1),
         )
 
@@ -200,16 +189,16 @@ class EDSFusion(nn.Module):
         edge_map = self.edge_extractor(x)                  # (B, 1, H, W)
 
         # ---- 可学习加权融合 ----
-        weights  = F.softmax(self.fusion_weights, dim=0)
-        fused    = weights[0] * global_map + weights[1] * edge_map
+        weights = F.softmax(self.fusion_weights, dim=0)
+        fused   = weights[0] * global_map + weights[1] * edge_map
 
         # ---- 双路细化网络 ----
-        stacked  = torch.cat([global_map, edge_map], dim=1)  # (B, 2, H, W)
-        refined  = self.refine(stacked)                       # (B, 1, H, W)
+        stacked = torch.cat([global_map, edge_map], dim=1)  # (B, 2, H, W)
+        refined = self.refine(stacked)                       # (B, 1, H, W)
 
         # ---- 残差混合 ----
-        # global_map 和 edge_map 均已经过 Sigmoid，fused 天然在 [0,1]，
-        # 无需再做 sigmoid（否则会将变化范围从 [0,1] 压缩到 [0.5,0.73]）
+        # global_map 和 edge_map 均已过 Sigmoid，fused 天然在 [0,1]，
+        # 无需再做 sigmoid（否则变化范围从 [0,1] 压缩到 [0.5,0.73]）
         attention = 0.6 * refined + 0.4 * fused
 
         return attention
@@ -282,8 +271,7 @@ class Fusion(nn.Module):
 
     参数：
         use_eds_at_finest : bool
-            由 Model.py 按 idx==0 在构造时设置，
-            消除原先因 fusion_index=3-idx 反转导致的索引倒置 bug。
+            由 Model.py 按 idx==0 在构造时设置。
     """
     def __init__(self,
                  resample_dim,
@@ -310,7 +298,6 @@ class Fusion(nn.Module):
 
         # ===== Stage 4: 空间注意力 =====
         if use_eds_at_finest:
-            # 深度/分割各自独立的 EDS 实例，防止两任务特征分布互相干扰
             self.eds_fusion_depth = EDSFusion(channels=resample_dim)
             self.eds_fusion_seg   = EDSFusion(channels=resample_dim)
         else:
@@ -325,8 +312,6 @@ class Fusion(nn.Module):
             index          : 当前尺度索引，0=最细(96×96) … 3=最粗(12×12)
             previous_depth : 上一尺度深度特征
             previous_seg   : 上一尺度分割特征
-            out_depths     : 历史深度预测（多尺度列表）
-            out_segs       : 历史分割预测（多尺度列表）
         返回：
             output_depth, output_seg (B, C, 2H, 2W)
         """
@@ -354,21 +339,17 @@ class Fusion(nn.Module):
         depth_coord_attn = self.coord_att_depth(output_depth)
         seg_coord_attn   = self.coord_att_seg(output_seg)
 
-        # 交叉调制：深度特征借助分割注意力，分割特征借助深度注意力
         output_depth_ca = output_depth * seg_coord_attn
         output_seg_ca   = output_seg   * depth_coord_attn
 
         # ---- Stage 4: 空间注意力 ----
         if self.use_eds_at_finest:
-            # 细尺度：EDS-Fusion（深度/分割独立实例）
             depth_spatial_attn = self.eds_fusion_depth(output_depth_ca)
             seg_spatial_attn   = self.eds_fusion_seg(output_seg_ca)
         else:
-            # 粗尺度：SpatialAttention
             depth_spatial_attn = self.sa_depth(output_depth_ca)
             seg_spatial_attn   = self.sa_seg(output_seg_ca)
 
-        # 交叉调制保留跨任务信息交换
         output_depth = output_depth_ca * seg_spatial_attn
         output_seg   = output_seg_ca   * depth_spatial_attn
 
