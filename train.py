@@ -4,8 +4,13 @@ from utils.builder import get_dataloader
 
 
 ################ load the config file ##################
-with open('config/config.json', 'r') as f:
+# with open('config/config.json', 'r') as f:
+#     config = json.load(f)
+
+
+with open('config/ablation/Exp5_Full.json', 'r') as f:
     config = json.load(f)
+
 # np.random.seed(config['Trainer']['seed'])
 
 ############### load the trainer ###############

@@ -3,14 +3,12 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from models.msda import MultiScaleDilatedAttention
 from models.dcca import DCCA
 
 
-# ==================== CoordinateAttention（完全保留）====================
+# ==================== CoordinateAttention（保留用于对比）====================
 
 class h_sigmoid(nn.Module):
-    """Hard Sigmoid激活函数"""
     def __init__(self, inplace=True):
         super(h_sigmoid, self).__init__()
         self.relu = nn.ReLU6(inplace=inplace)
@@ -20,7 +18,6 @@ class h_sigmoid(nn.Module):
 
 
 class h_swish(nn.Module):
-    """Hard Swish激活函数"""
     def __init__(self, inplace=True):
         super(h_swish, self).__init__()
         self.sigmoid = h_sigmoid(inplace=inplace)
@@ -30,223 +27,204 @@ class h_swish(nn.Module):
 
 
 class CoordinateAttention(nn.Module):
-    """
-    坐标注意力模块（保持不变）
-    论文: Coordinate Attention for Efficient Mobile Network Design (CVPR2021)
-    """
+    """原始 CoordinateAttention（保留用于对比实验）"""
     def __init__(self, inp, oup, reduction=32):
         super(CoordinateAttention, self).__init__()
-        
         self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
         self.pool_w = nn.AdaptiveAvgPool2d((1, None))
-
         mip = max(8, inp // reduction)
-
-        self.conv1 = nn.Conv2d(inp, mip, kernel_size=1, stride=1, padding=0)
-        self.bn1 = nn.BatchNorm2d(mip)
-        self.act = h_swish()
-        
-        self.conv_h = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
-        self.conv_w = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
+        self.conv1   = nn.Conv2d(inp, mip, kernel_size=1, stride=1, padding=0)
+        self.bn1     = nn.BatchNorm2d(mip)
+        self.act     = h_swish()
+        self.conv_h  = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
+        self.conv_w  = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
 
     def forward(self, x):
         identity = x
         B, C, H, W = x.size()
-        
         x_h = self.pool_h(x)
         x_w = self.pool_w(x).permute(0, 1, 3, 2)
-
-        y = torch.cat([x_h, x_w], dim=2)
-        y = self.conv1(y)
-        y = self.bn1(y)
-        y = self.act(y)
-        
+        y   = torch.cat([x_h, x_w], dim=2)
+        y   = self.conv1(y)
+        y   = self.bn1(y)
+        y   = self.act(y)
         x_h, x_w = torch.split(y, [H, W], dim=2)
         x_w = x_w.permute(0, 1, 3, 2)
-
         a_h = self.conv_h(x_h).sigmoid()
         a_w = self.conv_w(x_w).sigmoid()
-
-        out = identity * a_w * a_h
-
-        return out
+        return identity * a_w * a_h
 
 
-# ==================== SpatialAttention（用于粗尺度）====================
+# ==================== SpatialAttention（粗尺度 fallback）====================
 
 class SpatialAttention(nn.Module):
-    """简单的空间注意力（用于粗尺度）"""
+    """
+    简单空间注意力。
+    用于粗尺度（index=2: 24×24，index=3: 12×12）。
+    """
     def __init__(self):
         super(SpatialAttention, self).__init__()
-        self.conv1 = nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False)
+        self.conv1   = nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False)
         self.sigmoid = nn.Sigmoid()
 
     def forward(self, x):
         avg_out = torch.mean(x, dim=1, keepdim=True)
         max_out, _ = torch.max(x, dim=1, keepdim=True)
         x = torch.cat([avg_out, max_out], dim=1)
-        x = self.conv1(x)
-        return self.sigmoid(x)
+        return self.sigmoid(self.conv1(x))
 
 
-# ==================== EdgeExtractor（优化版）====================
+# ==================== EdgeExtractor ====================
 
 class EdgeExtractor(nn.Module):
     """
-    边缘提取器（优化版）
-    
-    改进：
-    1. Sobel算子初始化
-    2. 轻量增强网络
-    3. 通道独立处理（可选）
+    边缘提取器。
+
+    流程：
+      1. channel_reduce: 1×1 卷积将 256 通道压缩到 8 通道（可学习）。
+         目的：避免 Conv2d(256→2) 时 256 个通道叠加求和导致
+               高激活通道主导梯度响应，Sobel 语义失效。
+      2. sobel_conv: 对 8 通道特征做 Sobel 边缘检测（权重冻结，不可学习）。
+         固定 Sobel 算子整个训练过程始终保持真正的梯度检测语义，
+         与 SE-MDE (Zuo et al., CVIU 2025) 的固定 Sobel 设计一致。
+      3. edge_enhance: 将 2 通道梯度图（x/y 方向）融合为 1 通道边缘图（可学习）。
+
+    参数量：
+      channel_reduce: 256×8 = 2,048
+      sobel_conv:     8×2×9 = 144（冻结，不参与优化）
+      edge_enhance:   2×8×9 + 8×1 = 152 + 16(BN) + 9 = 177
+      合计可训练参数: 2,048 + 177 = 2,225
     """
-    def __init__(self, in_channels=256):
+    def __init__(self, in_channels=256, reduce_channels=8):
         super(EdgeExtractor, self).__init__()
-        
-        # Sobel卷积（可学习）
-        self.sobel_conv = nn.Conv2d(in_channels, 2, kernel_size=3, 
-                                    stride=1, padding=1, bias=False)
-        
-        # Sobel算子
-        sobel_kx = torch.tensor([[1., 0., -1.], 
-                                 [2., 0., -2.], 
-                                 [1., 0., -1.]])
-        sobel_ky = torch.tensor([[1., 2., 1.], 
-                                 [0., 0., 0.], 
-                                 [-1., -2., -1.]])
-        
-        # 初始化（使用.data避免创建计算图）
+
+        # Step 1: 通道压缩
+        self.channel_reduce = nn.Conv2d(
+            in_channels, reduce_channels, kernel_size=1, bias=False)
+
+        # Step 2: Sobel 卷积（低维空间，语义干净）
+        self.sobel_conv = nn.Conv2d(
+            reduce_channels, 2, kernel_size=3,
+            stride=1, padding=1, bias=False)
+
+        sobel_kx = torch.tensor([[1.,  0., -1.],
+                                  [2.,  0., -2.],
+                                  [1.,  0., -1.]])
+        sobel_ky = torch.tensor([[1.,  2.,  1.],
+                                  [0.,  0.,  0.],
+                                  [-1., -2., -1.]])
         with torch.no_grad():
-            # X方向梯度
-            for i in range(in_channels):
-                self.sobel_conv.weight.data[0, i, :, :] = sobel_kx
-            # Y方向梯度
-            for i in range(in_channels):
-                self.sobel_conv.weight.data[1, i, :, :] = sobel_ky
-        
-        # 边缘增强网络
+            for i in range(reduce_channels):
+                self.sobel_conv.weight.data[0, i] = sobel_kx
+                self.sobel_conv.weight.data[1, i] = sobel_ky
+
+        # 冻结 Sobel 算子：权重不参与梯度更新，整个训练过程始终保持真正的
+        # 边缘检测语义，与 SE-MDE (Zuo et al., CVIU 2025) 的固定 Sobel 设计一致。
+        # channel_reduce 和 edge_enhance 保持可学习，负责特征投影与任务适应。
+        self.sobel_conv.weight.requires_grad = False
+
+        # Step 3: 梯度图融合为单通道边缘响应
         self.edge_enhance = nn.Sequential(
-            nn.Conv2d(2, 8, kernel_size=3, padding=1),
+            nn.Conv2d(2, 8, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(8),
             nn.ReLU(inplace=True),
             nn.Conv2d(8, 1, kernel_size=1),
             nn.Sigmoid()
         )
-    
+
     def forward(self, x):
-        """
-        输入: x (B, C, H, W)
-        输出: edge_map (B, 1, H, W)
-        """
-        edges = self.sobel_conv(x)          # (B, 2, H, W)
-        edge_map = self.edge_enhance(edges) # (B, 1, H, W)
+        x_reduced = self.channel_reduce(x)      # (B, 256, H, W) → (B, 8, H, W)
+        edges     = self.sobel_conv(x_reduced)  # (B, 8, H, W)  → (B, 2, H, W)
+        edge_map  = self.edge_enhance(edges)    # (B, 2, H, W)  → (B, 1, H, W)
         return edge_map
 
 
-# ==================== EDS-Fusion（完全修复版）====================
+# ==================== EDSFusion（双路精简版）====================
 
 class EDSFusion(nn.Module):
     """
     EDS-Fusion: Enhanced Dual-Scale Spatial Attention with Edge Guidance
-    
-    三路并行注意力：
-    1. Local-SAM: 高分辨率局部注意力（保留细节）
-    2. Global-SAM: 全局上下文（理解整体形状）- ✅ 已修复
-    3. Edge-SAM: 边缘线索（针对透明物体边界）
-    
-    修复说明：
-    - 原始Global-SAM在expand后所有位置值相同，导致失效
-    - 新版本使用通道级全局特征，通过卷积生成空间变化的注意力
+
+    双路并行注意力（精简自原三路版本，删除与 DCCA 重叠的 Local-SAM）：
+      1. Global-SAM : 压缩到 4×4 再双线性上采样，保留全局空间变化能力，
+                      针对透明物体全局光线折射建模。
+      2. Edge-SAM   : Sobel 初始化边缘提取，针对透明物体边界模糊问题。
+
+    仅用于最细尺度（idx=0: 96×96）。
+    深度分支与分割分支在 Fusion 类中各自实例化，权重不共享。
+
+    设计说明：
+      原三路版本中的 Local-SAM 与上游 DCCA（Stage 3）在功能上高度重叠，
+      均为 channel-pooled 空间注意力，删除后不影响性能且 ablation 更清晰。
+      原 Global-SAM 使用 AdaptiveAvgPool2d(1) 导致全空间输出单一标量，
+      空间注意力完全失效；新版改为压缩到 4×4 后上采样，修复此问题。
     """
     def __init__(self, channels=256):
         super(EDSFusion, self).__init__()
-        
-        # ===== Local-SAM =====
-        self.local_conv = nn.Sequential(
-            nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False),
-            nn.BatchNorm2d(1)
-        )
-        
-        # ===== Global-SAM（修复版）=====
-        # 使用通道维度的全局统计，生成空间一致的全局上下文
-        self.global_pool = nn.AdaptiveAvgPool2d(1)  # 全局池化
-        self.global_conv = nn.Sequential(
+
+        # ===== Global-SAM =====
+        self.global_branch = nn.Sequential(
             nn.Conv2d(channels, channels // 4, kernel_size=1),
             nn.ReLU(inplace=True),
+            nn.AdaptiveAvgPool2d(4),               # 压缩到 4×4 保留空间结构
             nn.Conv2d(channels // 4, 1, kernel_size=1),
-            nn.Sigmoid()
         )
-        
-        # ===== Edge Path =====
+
+        # ===== Edge-SAM =====
         self.edge_extractor = EdgeExtractor(channels)
-        
-        # ===== 融合门控（可学习权重）=====
-        self.fusion_weights = nn.Parameter(torch.tensor([0.33, 0.33, 0.34]))
-        
-        # ===== 最终细化 =====
+
+        # ===== 可学习融合权重 =====
+        self.fusion_weights = nn.Parameter(torch.tensor([0.5, 0.5]))
+
+        # ===== 双路细化网络 =====
         self.refine = nn.Sequential(
-            nn.Conv2d(3, 1, kernel_size=3, padding=1),
+            nn.Conv2d(2, 1, kernel_size=3, padding=1),
             nn.Sigmoid()
         )
-        
-        # ===== 残差权重（可学习）=====
-        self.residual_weight = nn.Parameter(torch.tensor([0.6, 0.4]))
-    
+
     def forward(self, x):
         """
-        输入: x (B, C, H, W)
-        输出: attention_map (B, 1, H, W)
+        输入:  x (B, C, H, W)
+        输出:  attention_map (B, 1, H, W)，值域 [0, 1]
         """
         B, C, H, W = x.size()
-        
-        # ========== Local-SAM: 局部细节 ==========
-        max_out = torch.max(x, dim=1, keepdim=True)[0]
-        avg_out = torch.mean(x, dim=1, keepdim=True)
-        local_map = self.local_conv(torch.cat([max_out, avg_out], dim=1))  # (B, 1, H, W)
-        
-        # ========== Global-SAM: 全局上下文（修复版）==========
-        # 步骤1: 提取全局特征
-        global_feat = self.global_pool(x)  # (B, C, 1, 1)
-        
-        # 步骤2: 通过卷积生成全局注意力（空间一致）
-        global_attn = self.global_conv(global_feat)  # (B, 1, 1, 1)
-        
-        # 步骤3: 广播到全空间
-        global_map = global_attn.expand(B, 1, H, W)  # (B, 1, H, W)
-        
-        # ========== Edge-SAM: 边缘线索 ==========
-        edge_map = self.edge_extractor(x)  # (B, 1, H, W)
-        
-        # ========== 可学习融合 ==========
-        # 归一化权重（确保和为1）
-        weights = F.softmax(self.fusion_weights, dim=0)
-        
-        fused_map = (weights[0] * local_map + 
-                     weights[1] * global_map + 
-                     weights[2] * edge_map)
-        
-        # ========== 最终细化 ==========
-        stacked = torch.cat([local_map, global_map, edge_map], dim=1)
-        refined_attention = self.refine(stacked)
-        
-        # ========== 残差连接（可学习权重）==========
-        res_weights = F.softmax(self.residual_weight, dim=0)
-        attention = res_weights[0] * refined_attention + res_weights[1] * torch.sigmoid(fused_map)
-        
+
+        # ---- Global-SAM ----
+        global_small = self.global_branch(x)               # (B, 1, 4, 4)
+        global_map   = torch.sigmoid(
+            F.interpolate(global_small, size=(H, W),
+                          mode='bilinear', align_corners=True)
+        )                                                   # (B, 1, H, W)
+
+        # ---- Edge-SAM ----
+        edge_map = self.edge_extractor(x)                  # (B, 1, H, W)
+
+        # ---- 可学习加权融合 ----
+        weights  = F.softmax(self.fusion_weights, dim=0)
+        fused    = weights[0] * global_map + weights[1] * edge_map
+
+        # ---- 双路细化网络 ----
+        stacked  = torch.cat([global_map, edge_map], dim=1)  # (B, 2, H, W)
+        refined  = self.refine(stacked)                       # (B, 1, H, W)
+
+        # ---- 残差混合 ----
+        # global_map 和 edge_map 均已经过 Sigmoid，fused 天然在 [0,1]，
+        # 无需再做 sigmoid（否则会将变化范围从 [0,1] 压缩到 [0.5,0.73]）
+        attention = 0.6 * refined + 0.4 * fused
+
         return attention
 
 
-# ==================== 其他保留模块 ====================
+# ==================== 辅助模块 ====================
 
 class ResidualConvUnit(nn.Module):
-    """残差卷积单元"""
     def __init__(self, features):
         super().__init__()
-        self.conv1 = nn.Conv2d(
-            features, features, kernel_size=3, stride=1, padding=1, bias=True)
-        self.conv2 = nn.Conv2d(
-            features, features, kernel_size=3, stride=1, padding=1, bias=True)
-        self.relu = nn.ReLU()
+        self.conv1 = nn.Conv2d(features, features, kernel_size=3,
+                               stride=1, padding=1, bias=True)
+        self.conv2 = nn.Conv2d(features, features, kernel_size=3,
+                               stride=1, padding=1, bias=True)
+        self.relu  = nn.ReLU()
 
     def forward(self, x):
         out = self.relu(x)
@@ -257,22 +235,20 @@ class ResidualConvUnit(nn.Module):
 
 
 class GateConvUnit(nn.Module):
-    """门控卷积单元"""
     def __init__(self, features):
         super().__init__()
-        self.conv = nn.Conv2d(
-            features, features, kernel_size=1, stride=1, padding=0, dilation=1, bias=False)
+        self.conv = nn.Conv2d(features, features, kernel_size=1,
+                              stride=1, padding=0, bias=False)
         self.relu = nn.ReLU()
 
     def forward(self, x):
-        out = self.conv(x)
-        out = self.relu(out)
-        out = nn.functional.interpolate(out, scale_factor=0.5, mode="bilinear", align_corners=True)
+        out = self.relu(self.conv(x))
+        out = nn.functional.interpolate(out, scale_factor=0.5,
+                                        mode="bilinear", align_corners=True)
         return out
 
 
 class GGA(nn.Module):
-    """门控全局注意力"""
     def __init__(self, features):
         super().__init__()
         self.gate_conv = nn.Sequential(
@@ -284,193 +260,122 @@ class GGA(nn.Module):
         self.out_conv = nn.Conv2d(features, features, 1, bias=False)
 
     def forward(self, x, gate):
-        attention_map = self.gate_conv(torch.cat([x, gate], dim=1))
-        out = x * attention_map
-        out = self.out_conv(out)
-        return out
+        attn = self.gate_conv(torch.cat([x, gate], dim=1))
+        return self.out_conv(x * attn)
 
 
-# ==================== 主Fusion模块 ====================
+# ==================== Fusion 主模块 ====================
 
 class Fusion(nn.Module):
     """
-    语义和几何融合模块（完全修复版）
-    
-    改进架构：
-    Stage 1: ResidualConv + GateUnit (基础特征处理)
-    Stage 2: CoordinateAttention (语义级：通道+空间位置) 
-    Stage 3: EDS-Fusion (空间级：多尺度+边缘，修复了Global-SAM)
-    Stage 4: 残差连接和上采样
-    
+    语义与几何融合模块
+
+    四阶段架构：
+      Stage 1 : ResidualConvUnit — 基础特征提取
+      Stage 2 : GGA 门控 — 跨迭代历史引导
+      Stage 3 : DCCA — 深度↔分割跨任务坐标注意力
+      Stage 4 : 空间注意力
+                  最细尺度 idx=0（96×96）→ EDS-Fusion（Global-SAM + Edge-SAM）
+                    eds_fusion_depth 与 eds_fusion_seg 为独立实例
+                  粗尺度 idx∈{1,2,3}（48×48, 24×24, 12×12）→ SpatialAttention
+      Stage 5 : 双线性上采样 ×2
+
+    参数：
+        use_eds_at_finest : bool
+            由 Model.py 按 idx==0 在构造时设置，
+            消除原先因 fusion_index=3-idx 反转导致的索引倒置 bug。
     """
-    def __init__(self, 
-                 resample_dim, 
-                 nclasses,                    # 保持原有参数
-                 coord_reduction=32,          # 保持原有参数
-                 use_eds_at_finest=True,      # 保持原有参数
-                 use_msda=False,              # ✅ 新增：是否使用MSDA
-                 msda_dilation=None):         # ✅ 新增：MSDA的膨胀率):
+    def __init__(self,
+                 resample_dim,
+                 coord_reduction=32,
+                 use_eds_at_finest=False):
         super(Fusion, self).__init__()
-        
+
         self.use_eds_at_finest = use_eds_at_finest
-        self.use_msda = use_msda  # ✅ 新增
-        
-        # ===== Stage 1: 残差卷积单元 =====
+
+        # ===== Stage 1 =====
         self.res_conv1 = ResidualConvUnit(resample_dim)
-        
-        # 深度分支的卷积层
-        self.res_conv2_depth = nn.Sequential(
-            nn.ReLU(),
-            nn.Conv2d(resample_dim, resample_dim, kernel_size=3, stride=1, padding=1, bias=True),
-            nn.ReLU(),
-            nn.Conv2d(resample_dim, resample_dim, kernel_size=3, stride=1, padding=1, bias=True)
-        )
-        
-        # 分割分支的卷积层
-        self.res_conv2_seg = nn.Sequential(
-            nn.ReLU(),
-            nn.Conv2d(resample_dim, resample_dim, kernel_size=3, stride=1, padding=1, bias=True),
-            nn.ReLU(),
-            nn.Conv2d(resample_dim, resample_dim, kernel_size=3, stride=1, padding=1, bias=True)
-        )
 
-        # ===== Stage 2: 门控单元 =====
+        # ===== Stage 2: 门控 =====
         self.gate_conv_depth = GateConvUnit(resample_dim)
-        self.gate_conv_seg = GateConvUnit(resample_dim)
-        self.gate_depth = GGA(resample_dim)
-        self.gate_seg = GGA(resample_dim)
+        self.gate_conv_seg   = GateConvUnit(resample_dim)
+        self.gate_depth      = GGA(resample_dim)
+        self.gate_seg        = GGA(resample_dim)
 
-        # # ===== Stage 3: CoordinateAttention（语义级）=====
-        # self.coord_att_depth = CoordinateAttention(
-        #     inp=resample_dim, 
-        #     oup=resample_dim, 
-        #     reduction=coord_reduction
-        # )
-        # self.coord_att_seg = CoordinateAttention(
-        #     inp=resample_dim, 
-        #     oup=resample_dim, 
-        #     reduction=coord_reduction
-        # )
-        # ===== Stage 3: DCCA（改进的CoordinateAttention）=====
-        self.coord_att_depth = DCCA(
-            inp=resample_dim, 
-            oup=resample_dim, 
-            reduction=coord_reduction
-           
-        )
-        self.coord_att_seg = DCCA(
-            inp=resample_dim, 
-            oup=resample_dim, 
-            reduction=coord_reduction
-            
-        )
+        # ===== Stage 3: DCCA 跨任务坐标注意力 =====
+        self.coord_att_depth = DCCA(inp=resample_dim, oup=resample_dim,
+                                    reduction=coord_reduction)
+        self.coord_att_seg   = DCCA(inp=resample_dim, oup=resample_dim,
+                                    reduction=coord_reduction)
 
-        
-        # ===== Stage 4: EDS-Fusion（空间级）=====
+        # ===== Stage 4: 空间注意力 =====
         if use_eds_at_finest:
-            self.eds_fusion = EDSFusion(channels=resample_dim)
-        
-       # 4.2 MSDA（粗尺度，新增）✅
-        if use_msda and msda_dilation is not None:
-            print(f"[Fusion] Initializing MSDA with dilation={msda_dilation}, dim={resample_dim}")
-            self.msda_depth = MultiScaleDilatedAttention(
-                dim=resample_dim,
-                num_heads=8,
-                kernel_size=3,
-                dilation=msda_dilation,
-                attn_drop=0.1,
-                proj_drop=0.1
-            )
-            self.msda_seg = MultiScaleDilatedAttention(
-                dim=resample_dim,
-                num_heads=8,
-                kernel_size=3,
-                dilation=msda_dilation,
-                attn_drop=0.1,
-                proj_drop=0.1
-            )
+            # 深度/分割各自独立的 EDS 实例，防止两任务特征分布互相干扰
+            self.eds_fusion_depth = EDSFusion(channels=resample_dim)
+            self.eds_fusion_seg   = EDSFusion(channels=resample_dim)
         else:
-            # 4.3 简单SA（fallback，已有）
             self.sa_depth = SpatialAttention()
-            self.sa_seg = SpatialAttention()
-        
-    def forward(self, reassemble, index, previous_depth=None, previous_seg=None, 
+            self.sa_seg   = SpatialAttention()
+
+    def forward(self, reassemble, index, previous_depth=None, previous_seg=None,
                 out_depths=None, out_segs=None):
         """
-        前向传播
-        
         参数：
-            reassemble: 当前尺度的编码器特征 [B, C, H, W]
-            index: 当前尺度索引 (3→粗, 0→细)
-            previous_depth/seg: 上一尺度的特征
-            out_depths/segs: 上一次迭代的预测结果
-            
+            reassemble     : 当前尺度编码器特征 (B, C, H, W)
+            index          : 当前尺度索引，0=最细(96×96) … 3=最粗(12×12)
+            previous_depth : 上一尺度深度特征
+            previous_seg   : 上一尺度分割特征
+            out_depths     : 历史深度预测（多尺度列表）
+            out_segs       : 历史分割预测（多尺度列表）
         返回：
-            output_depth, output_seg: 融合后的深度和分割特征
+            output_depth, output_seg (B, C, 2H, 2W)
         """
-        ## ========== Stage 1: 初始化 + 残差卷积 ==========
+
+        # ---- Stage 1 ----
         if previous_depth is None and previous_seg is None:
             previous_depth = torch.zeros_like(reassemble)
-            previous_seg = torch.zeros_like(reassemble)
-            
+            previous_seg   = torch.zeros_like(reassemble)
+
         output_feature = self.res_conv1(reassemble)
-        output_depth = output_feature + previous_depth
-        output_seg = output_feature + previous_seg
-        
-        ## ========== Stage 2: 门控机制 ==========
+        output_depth   = output_feature + previous_depth
+        output_seg     = output_feature + previous_seg
+
+        # ---- Stage 2: 门控引导 ----
         if out_depths is not None and out_segs is not None:
             if len(out_depths) != 0 and len(out_segs) != 0:
-                depth = out_depths[-1][3-index]
-                seg = out_segs[-1][3-index]
+                depth = out_depths[-1][3 - index]
+                seg   = out_segs[-1][3 - index]
                 depth = self.gate_conv_depth(depth)
                 output_depth = self.gate_depth(output_depth, depth)
-                seg = self.gate_conv_seg(seg)
-                output_seg = self.gate_seg(output_seg, seg)
+                seg   = self.gate_conv_seg(seg)
+                output_seg   = self.gate_seg(output_seg, seg)
 
-        ## ========== Stage 3: CoordinateAttention跨任务交互 ==========
-        # 提取位置感知的语义特征
+        # ---- Stage 3: DCCA 跨任务交互 ----
         depth_coord_attn = self.coord_att_depth(output_depth)
-        seg_coord_attn = self.coord_att_seg(output_seg)
-        
-        # 交叉调制：语义级融合
-        output_seg_ca = output_seg * depth_coord_attn
-        output_depth_ca = output_depth * seg_coord_attn
+        seg_coord_attn   = self.coord_att_seg(output_seg)
 
-        ## ========== Stage 4: 空间注意力 ==========
-        # 策略：
-        # - index=0 (最细尺度96×96): 使用EDS-Fusion（边缘优化）
-        # - index=1,2,3 (粗尺度): 使用MSDA（多尺度全局建模）
-        
-        if self.use_eds_at_finest and index == 0:
-            # ===== 最细尺度：EDS-Fusion =====
-            depth_spatial_attn = self.eds_fusion(output_depth_ca)
-            seg_spatial_attn = self.eds_fusion(output_seg_ca)
-            
-            # 应用attention map
-            output_seg = output_seg_ca * depth_spatial_attn
-            output_depth = output_depth_ca * seg_spatial_attn
-        
-        elif self.use_msda and index in [1, 2, 3]:
-            # ===== 粗尺度：MSDA直接特征变换 =====
-            # 注意：MSDA不生成attention map，直接输出增强特征
-            output_depth = self.msda_depth(output_depth_ca)
-            output_seg = self.msda_seg(output_seg_ca)
-        
+        # 交叉调制：深度特征借助分割注意力，分割特征借助深度注意力
+        output_depth_ca = output_depth * seg_coord_attn
+        output_seg_ca   = output_seg   * depth_coord_attn
+
+        # ---- Stage 4: 空间注意力 ----
+        if self.use_eds_at_finest:
+            # 细尺度：EDS-Fusion（深度/分割独立实例）
+            depth_spatial_attn = self.eds_fusion_depth(output_depth_ca)
+            seg_spatial_attn   = self.eds_fusion_seg(output_seg_ca)
         else:
-            # ===== Fallback：简单SA =====
+            # 粗尺度：SpatialAttention
             depth_spatial_attn = self.sa_depth(output_depth_ca)
-            seg_spatial_attn = self.sa_seg(output_seg_ca)
-            
-            # 应用attention map
-            output_seg = output_seg_ca * depth_spatial_attn
-            output_depth = output_depth_ca * seg_spatial_attn
-        
-        ## ========== Stage 5: 上采样到下一尺度 ==========
-        output_seg = nn.functional.interpolate(
-            output_seg, scale_factor=2, mode="bilinear", align_corners=True)
+            seg_spatial_attn   = self.sa_seg(output_seg_ca)
+
+        # 交叉调制保留跨任务信息交换
+        output_depth = output_depth_ca * seg_spatial_attn
+        output_seg   = output_seg_ca   * depth_spatial_attn
+
+        # ---- Stage 5: 上采样 ----
         output_depth = nn.functional.interpolate(
             output_depth, scale_factor=2, mode="bilinear", align_corners=True)
-        
+        output_seg   = nn.functional.interpolate(
+            output_seg,   scale_factor=2, mode="bilinear", align_corners=True)
+
         return output_depth, output_seg
-
-

@@ -186,21 +186,48 @@ def get_optimizer(config, net):
         optimizer_scratch = optim.SGD(params_scratch, lr=config['Trainer']['lr_scratch'], momentum=config['Trainer']['momentum'])
     return optimizer_backbone, optimizer_scratch
 
-def get_schedulers(optimizers):
-    """改进的学习率调度器"""
+# def get_schedulers(optimizers):
+#     """改进的学习率调度器"""
+#     schedulers = []
+#     for optimizer in optimizers:
+#         scheduler = ReduceLROnPlateau(
+#             optimizer,
+#             mode='min',
+#             factor=0.5,
+#             patience=5,        # ✅ 改为5（从默认10）
+#             verbose=True,
+#             threshold=0.01,    # ✅ 新增（忽略<1%的假改进）
+#             min_lr=1e-7
+#         )
+#         schedulers.append(scheduler)
+#     return schedulers
+
+class NoOpScheduler:
+        """空调度器，不改变学习率，用于弱策略实验"""
+        def step(self, *args, **kwargs):
+            pass
+
+def get_schedulers(optimizers, config=None):
+    # 从config读取是否使用scheduler，默认True
+    use_scheduler = True
+    if config is not None:
+        use_scheduler = config['Trainer'].get('use_scheduler', True)
+
     schedulers = []
     for optimizer in optimizers:
-        scheduler = ReduceLROnPlateau(
-            optimizer,
-            mode='min',
-            factor=0.5,
-            patience=5,        # ✅ 改为5（从默认10）
-            verbose=True,
-            threshold=0.01,    # ✅ 新增（忽略<1%的假改进）
-            min_lr=1e-7
-        )
+        if use_scheduler:
+            scheduler = ReduceLROnPlateau(
+                optimizer,
+                mode='min', factor=0.5, patience=5,
+                verbose=True, threshold=0.01, min_lr=1e-7
+            )
+        else:
+            scheduler = NoOpScheduler()
         schedulers.append(scheduler)
     return schedulers
+
+
+
 
 
 # def get_schedulers(optimizers):

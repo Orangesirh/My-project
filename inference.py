@@ -3,7 +3,7 @@ from models.Trainer import Trainer
 from utils.visualize import *
 
 
-image_path = "./datasets/002982-color.png"
+image_path = "datasets/image/12418.png"
 
 ################ load the config file ##################
 with open('config/config.json', 'r') as f:

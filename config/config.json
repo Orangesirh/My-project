@@ -13,25 +13,13 @@
         "pretrain":true,
         "patch_size":16,
         "coord_reduction": 32,
-        "use_eds_at_finest": true,
-        "use_msda": true,
-        "msda_config": {
-            "dilation_rates": {
-                "3": [4, 8, 16],
-                "2": [2, 4, 8],
-                "1": [1, 2, 4]
-            },
-            "num_heads": 8,
-            "kernel_size": 3
-        }
-        
-        
+        "use_eds_at_finest": true
     },
 
     "Trainer":{
         "epochs":40,
         "loss_depth":"mse+normal+grad",
-        "loss_segmentation":"enhanced",  
+        "loss_segmentation":"ce",
         "ckpt_path":"./ckpt/ckpt/MODEST_EDS_Fusion/ISGNet_best.p",
         "gamma": 0.33,
 
@@ -41,18 +29,16 @@
         "use_edge_aware": true,
         "use_transparent_focus": true,
 
-
         "depth_multi":1.0,
         "depth_scale_multi":1.0,
         "depth_grad_multi":1.0,
         "depth_normal_multi":1.0,
         "depth_error_multi":1.0,
         "optim":"adam",
-        "lr_backbone":1.5e-5,
-        "lr_scratch":6e-4,
+        "lr_backbone":1e-5,
+        "lr_scratch":3e-4,
         "momentum":0.9,
         "seed":0
-         
     },
 
     "Dataset":{
@@ -90,16 +76,9 @@
                 "p_rot":0.2
             },
             "classes":{
-                "0": {
-                    "name": "background"
-                },
-                "1": {
-                    "name": "desk",
-                    "color": [150,5,61]
-                }, 
-                "2": {
-                    "name": "transparent"
-                }
+                "0": {"name": "background"},
+                "1": {"name": "desk", "color": [150,5,61]},
+                "2": {"name": "transparent"}
             }
         },
         "clearpose":{
@@ -118,23 +97,18 @@
                 "p_rot":0.2
             },
             "classes":{
-                "0": {
-                    "name": "background"
-                },
-                "1": {
-                    "name": "object"
-                }
+                "0": {"name": "background"},
+                "1": {"name": "object"}
             }
         }
     },
 
     "wandb":{
         "enable":false,
-        "project_name": "MODEST-CoordAtt", 
+        "project_name": "MODEST-EDS-Fusion",
         "username":"h2044160947-northeastern-university",
         "images_to_show":3,
         "im_h":480,
         "im_w":640
     }
-
 }
