@@ -689,19 +689,34 @@ class Trainer(object):
         image = transform(image).unsqueeze(0).to(self.device)
         os.makedirs('results', exist_ok=True)
 
+
         with torch.no_grad():
             output_depths, output_segs = self.model(image)
             final_depth = output_depths[-1][-1].squeeze(0).squeeze(0)
             final_seg   = output_segs[-1][-1].squeeze(0)
 
-            depth_visual = vis_depth(final_depth)
-            seg_visual   = vis_seg(final_seg,
-                                   image.squeeze(0).cpu().permute(1, 2, 0),
-                                   self.dataset_name)
+            img_for_vis = vis_rgb(image.squeeze(0).cpu(), self.dataset_name)  # ← 新增这行
+
+            depth_visual = vis_depth(final_depth.cpu())
+            seg_visual   = vis_seg(final_seg.cpu(), img_for_vis, self.dataset_name)  # ← 改这行
 
             Image.fromarray(depth_visual).save('results/depth.png')
             Image.fromarray(seg_visual).save('results/seg.png')
             print("Results saved to results/depth.png and results/seg.png")
+
+        # with torch.no_grad():
+        #     output_depths, output_segs = self.model(image)
+        #     final_depth = output_depths[-1][-1].squeeze(0).squeeze(0)
+        #     final_seg   = output_segs[-1][-1].squeeze(0)
+         
+        #     depth_visual = vis_depth(final_depth)
+        #     seg_visual   = vis_seg(final_seg,
+        #                            image.squeeze(0).cpu().permute(1, 2, 0),
+        #                            self.dataset_name)
+
+        #     Image.fromarray(depth_visual).save('results/depth.png')
+        #     Image.fromarray(seg_visual).save('results/seg.png')
+        #     print("Results saved to results/depth.png and results/seg.png")
 
     # ------------------------------------------------------------------ #
     # Save

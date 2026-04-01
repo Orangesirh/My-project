@@ -5,8 +5,10 @@ ISGNet Model - 单轮迭代版本
   原代码：fusion_index = 3 - idx，再判断 == 0
           → EDS 被安装在 s=32（12×12 最粗）的 Fusion 上
   修复后：直接判断 idx == 0
-          → idx=0（s=4, 96×96）使用 EDS-Fusion
-          → idx=1/2/3 使用 SpatialAttention
+          → idx=0（s=4,  96×96）→ identity（恒等透传）
+          → idx=1（s=8,  48×48）→ identity（恒等透传）
+          → idx=2（s=16, 24×24）→ SpatialAttention
+          → idx=3（s=32, 12×12）→ SpatialAttention
 """
 
 import numpy as np
@@ -60,8 +62,8 @@ class ISGNet(nn.Module):
         print(f"  resample_dim     : {resample_dim}")
         print(f"  use_eds_at_finest: {use_eds_at_finest}")
         print(f"  Stage4 分配:")
-        print(f"    idx=0  s=4   96×96  → {'EDS-Fusion' if use_eds_at_finest else 'SpatialAttention'}")
-        print(f"    idx=1  s=8   48×48  → SpatialAttention")
+        print(f"    idx=0  s=4   96×96  → identity（不作用）")
+        print(f"    idx=1  s=8   48×48  → identity（不作用）")
         print(f"    idx=2  s=16  24×24  → SpatialAttention")
         print(f"    idx=3  s=32  12×12  → SpatialAttention")
         print("=" * 60 + "\n")
@@ -71,13 +73,17 @@ class ISGNet(nn.Module):
                 Reassemble(image_size, read, patch_size, s, emb_dim, resample_dim)
             )
 
-            # idx=0（96×96）使用 EDS-Fusion，其余用 SpatialAttention
-            use_eds_current = use_eds_at_finest and (idx == 0)
+            # idx=0（96×96）→ identity
+            # idx=1（48×48）→ identity
+            # idx=2/3      → SpatialAttention
+            use_eds_current      = False
+            use_identity_current = (idx in [0, 1])
 
             self.fusions.append(Fusion(
                 resample_dim      = resample_dim,
                 coord_reduction   = coord_reduction,
                 use_eds_at_finest = use_eds_current,
+                use_identity      = use_identity_current,
             ))
 
         self.reassembles = nn.ModuleList(self.reassembles)

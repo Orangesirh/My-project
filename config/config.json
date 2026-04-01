@@ -1,6 +1,6 @@
 {
     "Model":{
-        "device":"cuda",
+        "device":"cpu",
         "type":"full",
         "path_model":"ckpt/MODEST_EDS_Fusion",
         "iterations": 1,

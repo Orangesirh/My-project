@@ -58,7 +58,7 @@ class CoordinateAttention(nn.Module):
 # ==================== SpatialAttention（粗尺度 fallback）====================
 
 class SpatialAttention(nn.Module):
-    """简单空间注意力，用于粗尺度（index=1,2,3）。"""
+    """简单空间注意力，用于粗尺度（index=2,3: 24×24, 12×12）。"""
     def __init__(self):
         super(SpatialAttention, self).__init__()
         self.conv1   = nn.Conv2d(2, 1, kernel_size=7, padding=3, bias=False)
@@ -264,9 +264,11 @@ class Fusion(nn.Module):
       Stage 2 : GGA 门控 — 跨迭代历史引导
       Stage 3 : DCCA — 深度↔分割跨任务坐标注意力
       Stage 4 : 空间注意力
-                  最细尺度 idx=0（96×96）→ EDS-Fusion（Global-SAM + Edge-SAM）
+                  idx=0（96×96）→ EDS-Fusion（Global-SAM + Edge-SAM）
                     eds_fusion_depth 与 eds_fusion_seg 为独立实例
-                  粗尺度 idx∈{1,2,3}（48×48, 24×24, 12×12）→ SpatialAttention
+                  idx=1（48×48）→ identity（恒等透传，跳过 Stage 4）
+                  idx=2（24×24）→ SpatialAttention
+                  idx=3（12×12）→ SpatialAttention
       Stage 5 : 双线性上采样 ×2
 
     参数：
@@ -276,10 +278,12 @@ class Fusion(nn.Module):
     def __init__(self,
                  resample_dim,
                  coord_reduction=32,
-                 use_eds_at_finest=False):
+                 use_eds_at_finest=False,
+                 use_identity=False):
         super(Fusion, self).__init__()
 
         self.use_eds_at_finest = use_eds_at_finest
+        self.use_identity      = use_identity   # True → Stage 4 恒等透传
 
         # ===== Stage 1 =====
         self.res_conv1 = ResidualConvUnit(resample_dim)
@@ -297,7 +301,9 @@ class Fusion(nn.Module):
                                     reduction=coord_reduction)
 
         # ===== Stage 4: 空间注意力 =====
-        if use_eds_at_finest:
+        if use_identity:
+            pass   # 不初始化任何模块，forward 直接透传 DCCA 输出
+        elif use_eds_at_finest:
             self.eds_fusion_depth = EDSFusion(channels=resample_dim)
             self.eds_fusion_seg   = EDSFusion(channels=resample_dim)
         else:
@@ -343,15 +349,20 @@ class Fusion(nn.Module):
         output_seg_ca   = output_seg   * depth_coord_attn
 
         # ---- Stage 4: 空间注意力 ----
-        if self.use_eds_at_finest:
+        if self.use_identity:
+            # 恒等透传：跳过空间注意力，直接使用 DCCA 输出
+            output_depth = output_depth_ca
+            output_seg   = output_seg_ca
+        elif self.use_eds_at_finest:
             depth_spatial_attn = self.eds_fusion_depth(output_depth_ca)
             seg_spatial_attn   = self.eds_fusion_seg(output_seg_ca)
+            output_depth = output_depth_ca * seg_spatial_attn
+            output_seg   = output_seg_ca   * depth_spatial_attn
         else:
             depth_spatial_attn = self.sa_depth(output_depth_ca)
             seg_spatial_attn   = self.sa_seg(output_seg_ca)
-
-        output_depth = output_depth_ca * seg_spatial_attn
-        output_seg   = output_seg_ca   * depth_spatial_attn
+            output_depth = output_depth_ca * seg_spatial_attn
+            output_seg   = output_seg_ca   * depth_spatial_attn
 
         # ---- Stage 5: 上采样 ----
         output_depth = nn.functional.interpolate(
