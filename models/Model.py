@@ -1,14 +1,14 @@
 """
-ISGNet Model - 单轮迭代版本
+ISGNet Model
 
-修复：EDS-Fusion 索引倒置 bug
-  原代码：fusion_index = 3 - idx，再判断 == 0
-          → EDS 被安装在 s=32（12×12 最粗）的 Fusion 上
-  修复后：直接判断 idx == 0
-          → idx=0（s=4,  96×96）→ identity（恒等透传）
-          → idx=1（s=8,  48×48）→ identity（恒等透传）
-          → idx=2（s=16, 24×24）→ SpatialAttention
-          → idx=3（s=32, 12×12）→ SpatialAttention
+修复：
+  1. EDS-Fusion 硬编码 bug
+       原代码：use_eds_current 硬编码为 False，use_identity 硬编码给 idx=0,1
+               导致 ISGNet.__init__ 接收的 use_eds_at_finest 参数从未真正传入 Fusion
+       修复后：直接将 use_eds_at_finest 传入每个 Fusion，use_identity 全部置 False
+               四个尺度（idx=0~3）均使用 EDS-Fusion 作为 Stage4 空间注意力
+
+  2. 保留其余逻辑不变（iterations 参数、hooks、head 等）
 """
 
 import numpy as np
@@ -62,10 +62,10 @@ class ISGNet(nn.Module):
         print(f"  resample_dim     : {resample_dim}")
         print(f"  use_eds_at_finest: {use_eds_at_finest}")
         print(f"  Stage4 分配:")
-        print(f"    idx=0  s=4   96×96  → identity（不作用）")
-        print(f"    idx=1  s=8   48×48  → identity（不作用）")
-        print(f"    idx=2  s=16  24×24  → SpatialAttention")
-        print(f"    idx=3  s=32  12×12  → SpatialAttention")
+        for idx, s in enumerate(reassemble_s):
+            h = image_size[1] // s
+            label = "EDS-Fusion" if use_eds_at_finest else "SpatialAttention"
+            print(f"    idx={idx}  s={s:2d}  {h:3d}×{h:<3d}  → {label}")
         print("=" * 60 + "\n")
 
         for idx, s in enumerate(reassemble_s):
@@ -73,17 +73,13 @@ class ISGNet(nn.Module):
                 Reassemble(image_size, read, patch_size, s, emb_dim, resample_dim)
             )
 
-            # idx=0（96×96）→ identity
-            # idx=1（48×48）→ identity
-            # idx=2/3      → SpatialAttention
-            use_eds_current      = False
-            use_identity_current = (idx in [0, 1])
-
+            # 修复：直接将外部传入的 use_eds_at_finest 传递给每个 Fusion
+            #       不再按 idx 硬编码，四层全部统一策略
             self.fusions.append(Fusion(
                 resample_dim      = resample_dim,
                 coord_reduction   = coord_reduction,
-                use_eds_at_finest = use_eds_current,
-                use_identity      = use_identity_current,
+                use_eds_at_finest = use_eds_at_finest,  # 真正使用外部参数
+                use_identity      = False,               # 四层均不做恒等透传
             ))
 
         self.reassembles = nn.ModuleList(self.reassembles)
@@ -101,13 +97,15 @@ class ISGNet(nn.Module):
             self.head_depth        = HeadDepth(resample_dim)
             self.head_segmentation = HeadSeg(resample_dim, nclasses=nclasses)
 
-        total_params = sum(p.numel() for p in self.parameters())
-        print(f"✓ Model initialized with {total_params:,} parameters")
+        total_params     = sum(p.numel() for p in self.parameters())
+        trainable_params = sum(p.numel() for p in self.parameters() if p.requires_grad)
+        print(f"✓ Model initialized with {total_params:,} total parameters "
+              f"({trainable_params:,} trainable)")
 
     def forward(self, img):
         t = self.transformer_encoders(img)
 
-        depth_feature, seg_feature   = None, None
+        depth_feature, seg_feature       = None, None
         multiscale_depth, multiscale_seg = [], []
 
         for i in np.arange(len(self.fusions) - 1, -1, -1):
