@@ -1,14 +1,13 @@
 """
-ISGNet Model
+ISGNet Model — 消融版本：CAM + 混合 Stage4
 
-修复：
-  1. EDS-Fusion 硬编码 bug
-       原代码：use_eds_current 硬编码为 False，use_identity 硬编码给 idx=0,1
-               导致 ISGNet.__init__ 接收的 use_eds_at_finest 参数从未真正传入 Fusion
-       修复后：直接将 use_eds_at_finest 传入每个 Fusion，use_identity 全部置 False
-               四个尺度（idx=0~3）均使用 EDS-Fusion 作为 Stage4 空间注意力
-
-  2. 保留其余逻辑不变（iterations 参数、hooks、head 等）
+消融设计：
+  Stage3 : Channel Attention Module（CAM，替换 DCCA）
+  Stage4 :
+    idx=0  s=4   96×96  → EDS-Fusion
+    idx=1  s=8   48×48  → EDS-Fusion
+    idx=2  s=16  24×24  → SpatialAttention
+    idx=3  s=32  12×12  → SpatialAttention
 """
 
 import numpy as np
@@ -38,7 +37,7 @@ class ISGNet(nn.Module):
                  pretrain            = True,
                  iterations          = 1,
                  in_chans            = 3,
-                 coord_reduction     = 32,
+                 coord_reduction     = 16,
                  use_eds_at_finest   = True):
         super().__init__()
 
@@ -56,15 +55,18 @@ class ISGNet(nn.Module):
         self.reassembles = []
         self.fusions     = []
 
+        # idx=0,1（96×96, 48×48）用 EDS-Fusion，idx=2,3（24×24, 12×12）用 SpatialAttention
+        eds_indices = [0, 1]
+
         print("\n" + "=" * 60)
-        print("ISGNet Configuration:")
+        print("ISGNet Configuration [Ablation: CAM + EDS-Fusion(fine) + SAM(coarse)]:")
         print(f"  iterations       : {iterations}")
         print(f"  resample_dim     : {resample_dim}")
-        print(f"  use_eds_at_finest: {use_eds_at_finest}")
+        print(f"  Stage3           : ChannelAttention / CAM（替换 DCCA）")
         print(f"  Stage4 分配:")
         for idx, s in enumerate(reassemble_s):
             h = image_size[1] // s
-            label = "EDS-Fusion" if use_eds_at_finest else "SpatialAttention"
+            label = "EDS-Fusion" if idx in eds_indices else "SpatialAttention"
             print(f"    idx={idx}  s={s:2d}  {h:3d}×{h:<3d}  → {label}")
         print("=" * 60 + "\n")
 
@@ -73,13 +75,11 @@ class ISGNet(nn.Module):
                 Reassemble(image_size, read, patch_size, s, emb_dim, resample_dim)
             )
 
-            # 修复：直接将外部传入的 use_eds_at_finest 传递给每个 Fusion
-            #       不再按 idx 硬编码，四层全部统一策略
             self.fusions.append(Fusion(
                 resample_dim      = resample_dim,
                 coord_reduction   = coord_reduction,
-                use_eds_at_finest = use_eds_at_finest,  # 真正使用外部参数
-                use_identity      = False,               # 四层均不做恒等透传
+                use_eds_at_finest = (idx in eds_indices),  # 细尺度 EDS，粗尺度 SAM
+                use_identity      = False,
             ))
 
         self.reassembles = nn.ModuleList(self.reassembles)

@@ -46,7 +46,7 @@
         "loss_depth": "mse+normal+grad",
         "loss_segmentation": "ce",
         "gamma": 0.33,
-        "seg_multi": 0.1,
+        "seg_multi": 0.2,
         "use_edge_aware": false,
         "use_transparent_focus": false,
         "depth_multi": 1.0,

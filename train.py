@@ -8,7 +8,7 @@ from utils.builder import get_dataloader
 #     config = json.load(f)
 
 
-with open('config/xiaorong/2sam.json', 'r') as f:
+with open('config/xiaorong/edsf_cam.json', 'r') as f:
     config = json.load(f)
 
 # np.random.seed(config['Trainer']['seed'])
