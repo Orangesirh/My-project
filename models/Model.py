@@ -1,8 +1,8 @@
 """
-ISGNet Model — 消融版本：CAM + 混合 Stage4
+ISGNet Model — 消融版本：CoordinateAttention + 混合 Stage4
 
 消融设计：
-  Stage3 : Channel Attention Module（CAM，替换 DCCA）
+  Stage3 : 原版 CoordinateAttention（替换 DCCA）
   Stage4 :
     idx=0  s=4   96×96  → EDS-Fusion
     idx=1  s=8   48×48  → EDS-Fusion
@@ -37,7 +37,7 @@ class ISGNet(nn.Module):
                  pretrain            = True,
                  iterations          = 1,
                  in_chans            = 3,
-                 coord_reduction     = 16,
+                 coord_reduction     = 32,
                  use_eds_at_finest   = True):
         super().__init__()
 
@@ -59,10 +59,10 @@ class ISGNet(nn.Module):
         eds_indices = [0, 1]
 
         print("\n" + "=" * 60)
-        print("ISGNet Configuration [Ablation: CAM + EDS-Fusion(fine) + SAM(coarse)]:")
+        print("ISGNet Configuration [Ablation: CA + EDS-Fusion(fine) + SAM(coarse)]:")
         print(f"  iterations       : {iterations}")
         print(f"  resample_dim     : {resample_dim}")
-        print(f"  Stage3           : ChannelAttention / CAM（替换 DCCA）")
+        print(f"  Stage3           : CoordinateAttention（替换 DCCA）")
         print(f"  Stage4 分配:")
         for idx, s in enumerate(reassemble_s):
             h = image_size[1] // s
@@ -78,7 +78,7 @@ class ISGNet(nn.Module):
             self.fusions.append(Fusion(
                 resample_dim      = resample_dim,
                 coord_reduction   = coord_reduction,
-                use_eds_at_finest = (idx in eds_indices),  # 细尺度 EDS，粗尺度 SAM
+                use_eds_at_finest = (idx in eds_indices),
                 use_identity      = False,
             ))
 

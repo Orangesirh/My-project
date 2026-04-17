@@ -704,6 +704,7 @@ class Trainer(object):
             Image.fromarray(seg_visual).save('results/seg.png')
             print("Results saved to results/depth.png and results/seg.png")
 
+    
         # with torch.no_grad():
         #     output_depths, output_segs = self.model(image)
         #     final_depth = output_depths[-1][-1].squeeze(0).squeeze(0)

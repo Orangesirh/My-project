@@ -1,14 +1,13 @@
 """
-models/Fusion.py — 消融版本：CAM + EDS-Fusion
+models/Fusion.py — 消融版本：CoordinateAttention + 混合 Stage4
 
-改动说明：
-  Stage3 将 DCCA 替换为 Channel Attention Module（CAM）
-    - CAM.forward 返回纯通道注意力权重 (B, C, 1, 1)，不包含特征值本身
-    - 交叉调制：output_depth = output_depth * seg_cam_attn
-               output_seg   = output_seg   * depth_cam_attn
-    - 与参考实现（document #25）完全一致
-  Stage4 使用 EDS-Fusion（由构造参数 use_eds_at_finest 控制）
-  去掉 from models.dcca import DCCA
+改动：
+  Stage3 将 DCCA 替换为原版 CoordinateAttention（Hou et al., CVPR 2021）
+    - CoordinateAttention 已在本文件内定义，无需额外导入
+    - 去掉 from models.dcca import DCCA
+    - forward 返回调制后特征 identity * a_h * a_w，与 DCCA 返回值形状语义一致
+    - 交叉调制方式与原版 Fusion.py 保持一致
+  Stage4 由构造参数控制（EDS-Fusion 或 SpatialAttention）
   其余模块完全不变
 """
 
@@ -17,29 +16,57 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 
-# ==================== CAM（Channel Attention Module）====================
+# ==================== CoordinateAttention（原版，用于消融 Stage3）====================
 
-class ChannelAttention(nn.Module):
-    """
-    Channel Attention Module
-    forward 返回纯注意力权重 (B, C, 1, 1)，不含特征值。
-    """
-    def __init__(self, channel, reduction=16):
-        super(ChannelAttention, self).__init__()
-        self.avg_pool = nn.AdaptiveAvgPool2d(1)
-        self.max_pool = nn.AdaptiveMaxPool2d(1)
-        self.fc = nn.Sequential(
-            nn.Conv2d(channel, channel // reduction, 1, bias=False),
-            nn.ReLU(),
-            nn.Conv2d(channel // reduction, channel, 1, bias=False)
-        )
-        self.sigmoid = nn.Sigmoid()
+class h_sigmoid(nn.Module):
+    def __init__(self, inplace=True):
+        super(h_sigmoid, self).__init__()
+        self.relu = nn.ReLU6(inplace=inplace)
 
     def forward(self, x):
-        avg_out = self.fc(self.avg_pool(x))
-        max_out = self.fc(self.max_pool(x))
-        out = avg_out + max_out
-        return self.sigmoid(out)          # (B, C, 1, 1) 纯权重图
+        return self.relu(x + 3) / 6
+
+
+class h_swish(nn.Module):
+    def __init__(self, inplace=True):
+        super(h_swish, self).__init__()
+        self.sigmoid = h_sigmoid(inplace=inplace)
+
+    def forward(self, x):
+        return x * self.sigmoid(x)
+
+
+class CoordinateAttention(nn.Module):
+    """
+    原版 CoordinateAttention（Hou et al., CVPR 2021）
+    forward 返回调制后特征 identity * a_h * a_w，形状 (B, C, H, W)
+    用于消融实验，替换 DCCA，验证坐标平滑改进的有效性。
+    """
+    def __init__(self, inp, oup, reduction=32):
+        super(CoordinateAttention, self).__init__()
+        self.pool_h = nn.AdaptiveAvgPool2d((None, 1))
+        self.pool_w = nn.AdaptiveAvgPool2d((1, None))
+        mip = max(8, inp // reduction)
+        self.conv1  = nn.Conv2d(inp, mip, kernel_size=1, stride=1, padding=0)
+        self.bn1    = nn.BatchNorm2d(mip)
+        self.act    = h_swish()
+        self.conv_h = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
+        self.conv_w = nn.Conv2d(mip, oup, kernel_size=1, stride=1, padding=0)
+
+    def forward(self, x):
+        identity = x
+        B, C, H, W = x.size()
+        x_h = self.pool_h(x)
+        x_w = self.pool_w(x).permute(0, 1, 3, 2)
+        y   = torch.cat([x_h, x_w], dim=2)
+        y   = self.conv1(y)
+        y   = self.bn1(y)
+        y   = self.act(y)
+        x_h, x_w = torch.split(y, [H, W], dim=2)
+        x_w = x_w.permute(0, 1, 3, 2)
+        a_h = self.conv_h(x_h).sigmoid()
+        a_w = self.conv_w(x_w).sigmoid()
+        return identity * a_h * a_w   # (B, C, H, W) 调制后特征
 
 
 # ==================== SpatialAttention ====================
@@ -195,19 +222,19 @@ class GGA(nn.Module):
 
 class Fusion(nn.Module):
     """
-    消融版本：Stage3 使用 CAM，Stage4 使用 EDS-Fusion
+    消融版本：CoordinateAttention + 混合 Stage4
 
     Stage 1 : ResidualConvUnit
     Stage 2 : GGA 门控
-    Stage 3 : CAM 跨任务通道注意力
-                ca_depth(output_depth) → (B,C,1,1) 权重，调制 output_seg
-                ca_seg(output_seg)     → (B,C,1,1) 权重，调制 output_depth
+    Stage 3 : CoordinateAttention 跨任务交互（消融，替换 DCCA）
+                coord_att_depth(output_depth) → 调制后特征，交叉作用于 output_seg
+                coord_att_seg(output_seg)     → 调制后特征，交叉作用于 output_depth
     Stage 4 : EDS-Fusion / SpatialAttention / identity（由构造参数控制）
     Stage 5 : 双线性上采样 ×2
     """
     def __init__(self,
                  resample_dim,
-                 coord_reduction=16,
+                 coord_reduction=32,
                  use_eds_at_finest=False,
                  use_identity=False):
         super(Fusion, self).__init__()
@@ -224,10 +251,11 @@ class Fusion(nn.Module):
         self.gate_depth      = GGA(resample_dim)
         self.gate_seg        = GGA(resample_dim)
 
-        # ===== Stage 3: CAM 跨任务通道注意力 =====
-        # reduction 使用参考实现默认值 16，coord_reduction 参数保留但此处固定
-        self.ca_depth = ChannelAttention(resample_dim, reduction=coord_reduction)
-        self.ca_seg   = ChannelAttention(resample_dim, reduction=coord_reduction)
+        # ===== Stage 3: 原版 CoordinateAttention（消融，替换 DCCA）=====
+        self.coord_att_depth = CoordinateAttention(
+            inp=resample_dim, oup=resample_dim, reduction=coord_reduction)
+        self.coord_att_seg   = CoordinateAttention(
+            inp=resample_dim, oup=resample_dim, reduction=coord_reduction)
 
         # ===== Stage 4: 空间注意力 =====
         if use_identity:
@@ -261,12 +289,13 @@ class Fusion(nn.Module):
                 seg   = self.gate_conv_seg(seg)
                 output_seg   = self.gate_seg(output_seg, seg)
 
-        # ---- Stage 3: CAM 跨任务通道注意力 ----
-        # ca_depth/ca_seg 返回纯权重 (B, C, 1, 1)，交叉调制
-        depth_cam_attn = self.ca_depth(output_depth)   # (B, C, 1, 1)
-        seg_cam_attn   = self.ca_seg(output_seg)       # (B, C, 1, 1)
-        output_depth_ca = output_depth * seg_cam_attn  # 深度被分割通道权重调制
-        output_seg_ca   = output_seg   * depth_cam_attn  # 分割被深度通道权重调制
+        # ---- Stage 3: CoordinateAttention 跨任务交互 ----
+        # 返回调制后特征 (B, C, H, W)，交叉作用于对方分支
+        depth_coord_attn = self.coord_att_depth(output_depth)
+        seg_coord_attn   = self.coord_att_seg(output_seg)
+
+        output_depth_ca = output_depth * seg_coord_attn
+        output_seg_ca   = output_seg   * depth_coord_attn
 
         # ---- Stage 4: 空间注意力 ----
         if self.use_identity:

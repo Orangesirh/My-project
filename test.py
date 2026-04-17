@@ -5,7 +5,7 @@ from models.Trainer import Trainer
 
 
 ################ load the config file ##################
-with open('config/config.json', 'r') as f:
+with open('config/xiaorong/CA_EDSF2.json', 'r') as f:
     config = json.load(f)
 
 ############### load the trainer ###############
