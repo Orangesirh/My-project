@@ -193,18 +193,18 @@ class Trainer(object):
 
                     if index == 0:
                         print(f"\n首轮数据检查:")
-                        print(f"RGB范围: {rgb.min().item():.4f} ~ {rgb.max().item():.4f}")
-                        print(f"深度真值范围: {depth_gt.min().item():.4f} ~ {depth_gt.max().item():.4f}")
+                        print(f"RGB范围: {rgb.min().item()} ~ {rgb.max().item()}")
+                        print(f"深度真值范围: {depth_gt.min().item()} ~ {depth_gt.max().item()}")
                         print(f"分割真值范围: {seg_gt.min().item()} ~ {seg_gt.max().item()} "
                               f"(类别数: {len(torch.unique(seg_gt))})")
 
                     output_depths, output_segs = self.model(rgb)
 
                     if index == 0:
-                        print(f"模型输出深度范围: {output_depths[-1][-1].min().item():.4f} "
-                              f"~ {output_depths[-1][-1].max().item():.4f}")
-                        print(f"模型输出分割范围: {output_segs[-1][-1].min().item():.4f} "
-                              f"~ {output_segs[-1][-1].max().item():.4f}")
+                        print(f"模型输出深度范围: {output_depths[-1][-1].min().item()} "
+                              f"~ {output_depths[-1][-1].max().item()}")
+                        print(f"模型输出分割范围: {output_segs[-1][-1].min().item()} "
+                              f"~ {output_segs[-1][-1].max().item()}")
 
                     total_loss      = torch.tensor(0.0, device=self.device, requires_grad=True)
                     depth_loss_total= torch.tensor(0.0, device=self.device)
@@ -541,11 +541,11 @@ class Trainer(object):
                     else MAE_mask_mean + RMSE_mask_mean + REL_mask_mean
 
                 print(f"  Depth Metrics:")
-                print(f"    RMSE: {RMSE_mean:.4f}, MAE: {MAE_mean:.4f}, REL: {REL_mean:.4f}")
-                print(f"    δ<1.05: {D105_mean:.1f}%, δ<1.10: {D110_mean:.1f}%, "
-                      f"δ<1.25: {D125_mean:.1f}%")
-                print(f"    Masked - RMSE: {RMSE_mask_mean:.4f}, MAE: {MAE_mask_mean:.4f}, "
-                      f"REL: {REL_mask_mean:.4f}")
+                print(f"    RMSE: {RMSE_mean}, MAE: {MAE_mean}, REL: {REL_mean}")
+                print(f"    δ<1.05: {D105_mean}%, δ<1.10: {D110_mean}%, "
+                      f"δ<1.25: {D125_mean}%")
+                print(f"    Masked - RMSE: {RMSE_mask_mean}, MAE: {MAE_mask_mean}, "
+                      f"REL: {REL_mask_mean}")
             else:
                 depth_eval = val_loss_avg
 
@@ -554,7 +554,7 @@ class Trainer(object):
                 mAP_mean = sum(mAP_all) / len(mAP_all)
                 seg_eval = IOU_mean + mAP_mean
                 print(f"  Segmentation Metrics:")
-                print(f"    mAP: {mAP_mean:.4f}, IoU: {IOU_mean:.4f}")
+                print(f"    mAP: {mAP_mean}, IoU: {IOU_mean}")
                 with open(self.path_statis, 'a') as f:
                     f.write(f"Epoch validation - mAP: {mAP_mean:.5f} \t IoU: {IOU_mean:.5f} \n")
             else:
@@ -566,16 +566,16 @@ class Trainer(object):
                 f.write(f"Loss: Total={val_loss_avg:.6f}, Depth={val_depth_loss_avg:.6f}, "
                         f"Seg={val_seg_loss_avg:.6f}\n")
                 if len(MAE_all) > 0:
-                    f.write(f"Depth (Overall): RMSE={RMSE_mean:.4f}, MAE={MAE_mean:.4f}, "
-                            f"REL={REL_mean:.4f}\n")
-                    f.write(f"  Accuracy: δ<1.05={D105_mean:.2f}%, δ<1.10={D110_mean:.2f}%, "
-                            f"δ<1.25={D125_mean:.2f}%\n")
-                    f.write(f"Depth (Transparent): RMSE={RMSE_mask_mean:.4f}, "
-                            f"MAE={MAE_mask_mean:.4f}, REL={REL_mask_mean:.4f}\n")
-                    f.write(f"  Accuracy: δ<1.05={D105_mask_mean:.2f}%, "
-                            f"δ<1.10={D110_mask_mean:.2f}%, δ<1.25={D125_mask_mean:.2f}%\n")
+                    f.write(f"Depth (Overall): RMSE={RMSE_mean}, MAE={MAE_mean}, "
+                            f"REL={REL_mean}\n")
+                    f.write(f"  Accuracy: δ<1.05={D105_mean}%, δ<1.10={D110_mean}%, "
+                            f"δ<1.25={D125_mean}%\n")
+                    f.write(f"Depth (Transparent): RMSE={RMSE_mask_mean}, "
+                            f"MAE={MAE_mask_mean}, REL={REL_mask_mean}\n")
+                    f.write(f"  Accuracy: δ<1.05={D105_mask_mean}%, "
+                            f"δ<1.10={D110_mask_mean}%, δ<1.25={D125_mask_mean}%\n")
                 if len(IoU_all) > 0:
-                    f.write(f"Segmentation: mAP={mAP_mean:.4f}, IoU={IOU_mean:.4f}\n")
+                    f.write(f"Segmentation: mAP={mAP_mean}, IoU={IOU_mean}\n")
                 f.write(f"{'='*80}\n")
 
         return val_loss_avg, depth_eval, seg_eval
@@ -645,23 +645,23 @@ class Trainer(object):
 
             if len(MAE_all) > 0:
                 print("Depth Estimation Results:")
-                print(f"  Overall - MAE: {sum(MAE_all)/len(MAE_all):.4f}, "
-                      f"RMSE: {sum(RMSE_all)/len(RMSE_all):.4f}, "
-                      f"REL: {sum(REL_all)/len(REL_all):.4f}")
-                print(f"  Overall - δ<1.05: {sum(DELTA105_all)/len(DELTA105_all):.1f}%, "
-                      f"δ<1.10: {sum(DELTA110_all)/len(DELTA110_all):.1f}%, "
-                      f"δ<1.25: {sum(DELTA125_all)/len(DELTA125_all):.1f}%")
-                print(f"  Masked  - MAE: {sum(MAE_mask_all)/len(MAE_mask_all):.4f}, "
-                      f"RMSE: {sum(RMSE_mask_all)/len(RMSE_mask_all):.4f}, "
-                      f"REL: {sum(REL_mask_all)/len(REL_mask_all):.4f}")
-                print(f"  Masked  - δ<1.05: {sum(DELTA105_mask_all)/len(DELTA105_mask_all):.1f}%, "
-                      f"δ<1.10: {sum(DELTA110_mask_all)/len(DELTA110_mask_all):.1f}%, "
-                      f"δ<1.25: {sum(DELTA125_mask_all)/len(DELTA125_mask_all):.1f}%")
+                print(f"  Overall - MAE: {sum(MAE_all)/len(MAE_all)}, "
+                      f"RMSE: {sum(RMSE_all)/len(RMSE_all)}, "
+                      f"REL: {sum(REL_all)/len(REL_all)}")
+                print(f"  Overall - δ<1.05: {sum(DELTA105_all)/len(DELTA105_all)}%, "
+                      f"δ<1.10: {sum(DELTA110_all)/len(DELTA110_all)}%, "
+                      f"δ<1.25: {sum(DELTA125_all)/len(DELTA125_all)}%")
+                print(f"  Masked  - MAE: {sum(MAE_mask_all)/len(MAE_mask_all)}, "
+                      f"RMSE: {sum(RMSE_mask_all)/len(RMSE_mask_all)}, "
+                      f"REL: {sum(REL_mask_all)/len(REL_mask_all)}")
+                print(f"  Masked  - δ<1.05: {sum(DELTA105_mask_all)/len(DELTA105_mask_all)}%, "
+                      f"δ<1.10: {sum(DELTA110_mask_all)/len(DELTA110_mask_all)}%, "
+                      f"δ<1.25: {sum(DELTA125_mask_all)/len(DELTA125_mask_all)}%")
 
             if len(IoU_all) > 0:
                 print("Segmentation Results:")
-                print(f"  IoU: {sum(IoU_all)/len(IoU_all):.4f}, "
-                      f"mAP: {sum(mAP_all)/len(mAP_all):.4f}")
+                print(f"  IoU: {sum(IoU_all)/len(IoU_all)}, "
+                      f"mAP: {sum(mAP_all)/len(mAP_all)}")
 
     # ------------------------------------------------------------------ #
     # Inference

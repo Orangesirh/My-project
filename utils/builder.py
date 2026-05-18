@@ -12,7 +12,7 @@ from utils.loss import *
 from datasets.syntodd import SynTodd
 from datasets.clearpose import ClearPose
 
-from utils.enhanced_seg_loss import EnhancedSegmentationLoss
+from utils.enhanced_seg_loss_v2 import EnhancedSegmentationLossV2
     
 
 def multiview_collate(batch):
@@ -42,7 +42,8 @@ def get_dataloader(config, mode):
     
     batch_size = dataset_config["batch_size"]
     num_workers = dataset_config["num_workers"]
-    shuffle = dataset_config[f"{mode}_shuffle"]
+    # shuffle = dataset_config[f"{mode}_shuffle"]
+    shuffle = dataset_config.get(f"{mode}_shuffle", False)
     
     return DataLoader(
             dataset,
@@ -51,8 +52,8 @@ def get_dataloader(config, mode):
             pin_memory=True,
             shuffle=shuffle,
             drop_last=True,
-            persistent_workers=True if num_workers > 0 else False,  # ← 新增！
-            prefetch_factor=4  # ← 新增！每个worker预取4个batch
+            persistent_workers=True if num_workers > 0 else False,
+            prefetch_factor=4
             )
 
 
@@ -109,25 +110,24 @@ def get_losses(config):
     if model_type in ['full', 'seg']:
         print("Initializing segmentation losses...")
         
-        # 主要分割损失
-        # if 'ce' in loss_seg_type:
-        #     loss_segmentation = nn.CrossEntropyLoss()
-        #     print("  - CrossEntropy segmentation loss initialized")
-
-        # ========== 关键修改：支持增强分割损失 ==========
+        # ========== 增强分割损失 V2 ==========
         if 'enhanced' in loss_seg_type:
-            # 使用增强分割损失
-            loss_segmentation = EnhancedSegmentationLoss(
+            # 透明类别 = 最后一个类（syntodd: class 2, clearpose: class 1）
+            transparent_class = num_classes - 1
+            loss_segmentation = EnhancedSegmentationLossV2(
                 edge_weight=config['Trainer'].get('seg_edge_weight', 2.0),
-                transparent_class=2,  # syntodd数据集中透明物体是class 2
+                transparent_class=transparent_class,
                 transparent_weight=config['Trainer'].get('seg_transparent_weight', 1.5),
                 num_classes=num_classes,
-                use_edge=config['Trainer'].get('use_edge_aware', True),
-                use_transparent_focus=config['Trainer'].get('use_transparent_focus', True)
+                dice_weight=config['Trainer'].get('seg_dice_weight', 0.5),
+                boundary_dilation=config['Trainer'].get('seg_boundary_dilation', 1),
             )
-            print("  - Enhanced segmentation loss initialized (Edge + Transparent Focus)")
+            print(f"  - EnhancedSegmentationLossV2 initialized")
+            print(f"    transparent_class={transparent_class}, "
+                  f"edge_weight={config['Trainer'].get('seg_edge_weight', 2.0)}, "
+                  f"transparent_weight={config['Trainer'].get('seg_transparent_weight', 1.5)}, "
+                  f"dice_weight={config['Trainer'].get('seg_dice_weight', 0.5)}")
         elif 'ce' in loss_seg_type:
-            # 使用基础CE损失
             loss_segmentation = nn.CrossEntropyLoss()
             print("  - CrossEntropy segmentation loss initialized")
         # ================================================
@@ -186,21 +186,6 @@ def get_optimizer(config, net):
         optimizer_scratch = optim.SGD(params_scratch, lr=config['Trainer']['lr_scratch'], momentum=config['Trainer']['momentum'])
     return optimizer_backbone, optimizer_scratch
 
-# def get_schedulers(optimizers):
-#     """改进的学习率调度器"""
-#     schedulers = []
-#     for optimizer in optimizers:
-#         scheduler = ReduceLROnPlateau(
-#             optimizer,
-#             mode='min',
-#             factor=0.5,
-#             patience=5,        # ✅ 改为5（从默认10）
-#             verbose=True,
-#             threshold=0.01,    # ✅ 新增（忽略<1%的假改进）
-#             min_lr=1e-7
-#         )
-#         schedulers.append(scheduler)
-#     return schedulers
 
 class NoOpScheduler:
         """空调度器，不改变学习率，用于弱策略实验"""
@@ -225,10 +210,3 @@ def get_schedulers(optimizers, config=None):
             scheduler = NoOpScheduler()
         schedulers.append(scheduler)
     return schedulers
-
-
-
-
-
-# def get_schedulers(optimizers):
-#     return [ReduceLROnPlateau(optimizer) for optimizer in optimizers]

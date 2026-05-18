@@ -2,7 +2,7 @@
     "Model":{
         "device":"cuda",
         "type":"full",
-        "path_model":"ckpt/DCCA_EDSF_ClearPose",
+        "path_model":"ckpt/Ablation/Exp5_Full",
         "iterations": 1,
         "path_predicted_images":"output",
         "model_timm":"vit_base_patch16_384",
@@ -13,21 +13,19 @@
         "pretrain":true,
         "patch_size":16,
         "coord_reduction": 32,
-        "use_eds_at_finest": true
+        "ablation_mode": "default"
     },
 
     "Trainer":{
-        "epochs":20,
+        "epochs":40,
         "loss_depth":"mse+normal+grad",
-        "loss_segmentation":"enhanced",
-        "ckpt_path":"./ckpt/ckpt/DCCA_EDSF_ClearPose/ISGNet_best.p",
+        "loss_segmentation":"ce",
+        "ckpt_path":"./ckpt/ckpt/Ablation/Exp5_Full/ISGNet_best.p",
         "gamma": 0.33,
 
-        "seg_multi":0.14,
+        "seg_multi":0.1,
         "seg_edge_weight": 2.0,
         "seg_transparent_weight": 1.5,
-        "seg_dice_weight": 0.5,
-        "seg_boundary_dilation": 1.0,
         "use_edge_aware": true,
         "use_transparent_focus": true,
 
@@ -37,14 +35,14 @@
         "depth_normal_multi":1.0,
         "depth_error_multi":1.0,
         "optim":"adam",
-        "lr_backbone":1e-5,
-        "lr_scratch":3e-4,
+        "lr_backbone":1.5e-5,
+        "lr_scratch":6e-4,
         "momentum":0.9,
         "seed":0
     },
 
     "Dataset":{
-        "dataset_name":"clearpose",
+        "dataset_name":"syntodd",
         "syntodd":{
             "batch_size":8,
             "num_workers":4,
@@ -84,12 +82,11 @@
             }
         },
         "clearpose":{
-            "batch_size":8,
-            "path":"/root/siton-data-hj/ClearPose/",
-            "num_workers":4,
+            "batch_size":4,
+            "path":"The absolute path to Clearpose dataset/",
+            "num_workers":2,
             "train_shuffle":true,
             "val_shuffle":false,
-            "test_shuffle": false,
             "in_chans":3,
             "depth_min":0.3,
             "depth_max":3.0,

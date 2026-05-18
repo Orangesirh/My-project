@@ -3,6 +3,7 @@ import cv2
 import torch
 import json
 import random
+import glob   # ← 新增 import
 
 import numpy as np
 import torchvision.transforms.functional as TF
@@ -79,22 +80,35 @@ class ClearPose(Dataset):
     
     
     def make_dataset(self):
+        """
+        扫描数据集目录, 返回所有可用样本的 (rgb, depth, mask) 路径三元组
+        改动:
+          - 用 glob 扫描真实存在的 color.png, 不依赖帧号连续编号
+          - 检查三类文件 (rgb/depth/mask) 都存在才加入, 避免训练时缺文件崩溃
+        """
         datalist = []
         config = self.grouping[self.spilt]
-        assert os.path.isdir(self.datadir)
-        for set, value in config.items():
-            for scene, number in value.items():
-                base_path = os.path.join(self.datadir, set, scene)
-                meta_path = os.path.join(base_path, 'metadata.mat')
-                for index in range(number):
-                    rgb_path = os.path.join(base_path, str(index).zfill(6) + '-color.png')
-                    depth_path = os.path.join(base_path, str(index).zfill(6) + '-depth_true.png')
-                    mask_path = os.path.join(base_path, str(index).zfill(6) + '-label.png')
-                    if os.path.exists(rgb_path):
+        assert os.path.isdir(self.datadir), f"数据集目录不存在: {self.datadir}"
+        
+        for set_name, scenes in config.items():
+            for scene, _ in scenes.items():
+                base_path = os.path.join(self.datadir, set_name, scene)
+                
+                # 扫描所有真实存在的 color.png 文件
+                color_files = sorted(glob.glob(os.path.join(base_path, '*-color.png')))
+                
+                for cf in color_files:
+                    # 从文件名提取帧 ID, 如 '000005-color.png' -> '000005'
+                    fid = os.path.basename(cf).split('-')[0]
+                    
+                    rgb_path   = cf
+                    depth_path = os.path.join(base_path, f'{fid}-depth_true.png')
+                    mask_path  = os.path.join(base_path, f'{fid}-label.png')
+                    
+                    # 三个文件都存在才加入
+                    if os.path.exists(depth_path) and os.path.exists(mask_path):
                         datalist.append((rgb_path, depth_path, mask_path))
-                    else:
-                        continue
-
+        
         return datalist
     
     def get_transforms(self):

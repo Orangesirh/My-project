@@ -14,7 +14,7 @@ models/Fusion.py — 消融版本：CoordinateAttention + 混合 Stage4
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
+from models.dcca import DCCA
 
 # ==================== CoordinateAttention（原版，用于消融 Stage3）====================
 
@@ -251,11 +251,18 @@ class Fusion(nn.Module):
         self.gate_depth      = GGA(resample_dim)
         self.gate_seg        = GGA(resample_dim)
 
-        # ===== Stage 3: 原版 CoordinateAttention（消融，替换 DCCA）=====
-        self.coord_att_depth = CoordinateAttention(
+        # # ===== Stage 3: 原版 CoordinateAttention（消融，替换 DCCA）=====
+        # self.coord_att_depth = CoordinateAttention(
+        #     inp=resample_dim, oup=resample_dim, reduction=coord_reduction)
+        # self.coord_att_seg   = CoordinateAttention(
+        #     inp=resample_dim, oup=resample_dim, reduction=coord_reduction)
+
+# ===== Stage 3: DCCA（Depthwise-Smoothed Coordinate Attention）=====
+        self.coord_att_depth = DCCA(
             inp=resample_dim, oup=resample_dim, reduction=coord_reduction)
-        self.coord_att_seg   = CoordinateAttention(
+        self.coord_att_seg   = DCCA(
             inp=resample_dim, oup=resample_dim, reduction=coord_reduction)
+
 
         # ===== Stage 4: 空间注意力 =====
         if use_identity:
